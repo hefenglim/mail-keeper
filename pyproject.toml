@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mailkeeper"
+version = "0.3.0"
+description = "替你看管收件匣 —— 登入 Outlook.com IMAP，讀取郵件標題並依規則自動整理"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Hefeng" }]
+keywords = ["outlook", "imap", "email", "oauth2", "xoauth2", "mail-organizer"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Communications :: Email",
+    "Environment :: Console",
+]
+dependencies = [
+    "msal>=1.28.0",
+    "charset-normalizer>=3",
+]
+
+[project.scripts]
+mailkeeper = "mailkeeper.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,4 @@
+# IMAP 與 email 都是標準函式庫，不需安裝
+# MSAL 處理 OAuth2 認證；charset-normalizer 做標題字集偵測（與 pyproject 一致）
+msal>=1.28.0
+charset-normalizer>=3

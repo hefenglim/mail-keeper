@@ -1,0 +1,22 @@
+# 認證快取（含有效憑證，切勿提交）
+token_cache.bin
+
+# 使用者本機設定（client_id / email；使用者專屬，不提交）
+config.json
+
+# 釋出暫存（內含建置產物與 token 快取，不提交）
+released/
+
+# 含 client_id 的個人記事，不提交
+*Client ID*.txt
+*識別碼*.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+*.tmp

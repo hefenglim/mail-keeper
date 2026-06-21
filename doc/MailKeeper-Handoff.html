@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MailKeeper — 開發交接文件 (Claude Code Handoff)</title>
+<style>
+  :root{
+    --ink:#16212B; --ink-soft:#4A5763; --faint:#8A95A0;
+    --paper:#F3F5F8; --surface:#FFFFFF; --line:#DCE2E8;
+    --brass:#9A6B12; --brass-bright:#C08A1E;
+    --teal:#1F6F6A;
+    --red:#B23A2E;
+    --code-bg:#151B23; --code-fg:#E7ECF1; --code-faint:#8A97A6;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang TC",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:var(--sans); font-size:16px; line-height:1.65;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:0 24px}
+
+  /* ---------- header ---------- */
+  header.hero{
+    background:var(--surface); border-bottom:1px solid var(--line);
+  }
+  .hero-inner{padding:54px 0 40px}
+  .eyebrow{
+    font-family:var(--mono); font-size:12px; letter-spacing:.22em;
+    text-transform:uppercase; color:var(--brass); margin:0 0 14px;
+  }
+  h1{
+    font-size:clamp(40px,7vw,72px); line-height:.98; margin:0;
+    letter-spacing:-.02em; font-weight:760;
+  }
+  h1 .dot{color:var(--brass)}
+  .lede{
+    font-size:clamp(17px,2.3vw,20px); color:var(--ink-soft);
+    max-width:60ch; margin:18px 0 0;
+  }
+  .meta{
+    display:flex; flex-wrap:wrap; gap:10px; margin-top:26px;
+    font-family:var(--mono); font-size:12.5px;
+  }
+  .chip{
+    border:1px solid var(--line); border-radius:2px; padding:5px 10px;
+    background:var(--paper); color:var(--ink-soft);
+  }
+  .chip b{color:var(--ink); font-weight:600}
+  .chip.green{border-color:#BFE0C4; background:#EEF7EF; color:#2C6E3A}
+  .chip.green b{color:#2C6E3A}
+
+  /* ---------- layout ---------- */
+  .grid{display:grid; grid-template-columns:230px 1fr; gap:48px; padding:48px 0 90px}
+  nav.toc{position:sticky; top:24px; align-self:start; font-size:13.5px}
+  nav.toc .label{
+    font-family:var(--mono); font-size:11px; letter-spacing:.18em;
+    text-transform:uppercase; color:var(--faint); margin:0 0 12px;
+  }
+  nav.toc ol{list-style:none; margin:0; padding:0; counter-reset:s}
+  nav.toc li{counter-increment:s; margin:2px 0}
+  nav.toc a{
+    display:block; padding:5px 10px 5px 0; color:var(--ink-soft);
+    text-decoration:none; border-left:2px solid transparent; padding-left:12px;
+    transition:.15s;
+  }
+  nav.toc a::before{
+    content:counter(s,decimal-leading-zero); font-family:var(--mono);
+    font-size:11px; color:var(--faint); margin-right:9px;
+  }
+  nav.toc a:hover{color:var(--brass); border-left-color:var(--brass)}
+
+  main{min-width:0}
+  section{margin:0 0 56px; scroll-margin-top:24px}
+  .sec-eyebrow{
+    font-family:var(--mono); font-size:11.5px; letter-spacing:.18em;
+    text-transform:uppercase; color:var(--brass); margin:0 0 8px;
+  }
+  h2{font-size:clamp(24px,3.4vw,30px); margin:0 0 6px; letter-spacing:-.01em; font-weight:720}
+  h3{font-size:17px; margin:30px 0 8px; font-weight:680}
+  p{margin:12px 0}
+  a.inline{color:var(--brass); text-decoration:none; border-bottom:1px solid #E2D4B5}
+  a.inline:hover{border-bottom-color:var(--brass)}
+  hr.rule{border:0; border-top:1px solid var(--line); margin:40px 0}
+
+  /* ---------- code ---------- */
+  code{font-family:var(--mono); font-size:.88em; background:#EAEEF2; padding:1px 5px; border-radius:3px; color:#33424F}
+  pre{
+    background:var(--code-bg); color:var(--code-fg); border-radius:7px;
+    padding:18px 20px; overflow-x:auto; font-family:var(--mono);
+    font-size:13px; line-height:1.6; margin:16px 0;
+    border:1px solid #1f2832;
+  }
+  pre code{background:none; padding:0; color:inherit; font-size:inherit}
+  pre .c{color:var(--code-faint)}      /* comment */
+  pre .k{color:#E0A458}                 /* keyword/brass */
+  pre .s{color:#8FD0A0}                 /* string */
+  pre .fn{color:#7FB7E8}                /* func/ident */
+
+  /* ---------- callouts ---------- */
+  .note{
+    border-left:3px solid var(--brass); background:var(--surface);
+    border-radius:0 7px 7px 0; padding:14px 18px; margin:18px 0;
+    border-top:1px solid var(--line); border-right:1px solid var(--line); border-bottom:1px solid var(--line);
+  }
+  .note.warn{border-left-color:var(--red)}
+  .note .tag{
+    font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--brass); display:block; margin-bottom:4px;
+  }
+  .note.warn .tag{color:var(--red)}
+
+  /* ---------- tables ---------- */
+  .tbl{width:100%; border-collapse:collapse; margin:18px 0; font-size:14px}
+  .tbl th,.tbl td{text-align:left; padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top}
+  .tbl thead th{
+    font-family:var(--mono); font-size:11.5px; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--faint); border-bottom:1.5px solid var(--ink);
+  }
+  .tbl td code{font-size:12.5px}
+  .tbl tr:last-child td{border-bottom:none}
+  .pill{font-family:var(--mono); font-size:11px; padding:2px 8px; border-radius:20px; white-space:nowrap}
+  .pill.p1{background:#F6E7CB; color:#7A5410}
+  .pill.p2{background:#E2EEF0; color:#1F6F6A}
+  .pill.p3{background:#ECEFF2; color:#5A6772}
+
+  /* ---------- architecture diagram (signature) ---------- */
+  .diagram{
+    background:var(--surface); border:1px solid var(--line); border-radius:10px;
+    padding:26px; margin:22px 0; font-family:var(--mono); font-size:13px;
+  }
+  .layer{display:flex; align-items:stretch; gap:14px; margin:0 0 12px}
+  .layer:last-child{margin-bottom:0}
+  .lname{
+    width:96px; flex:none; display:flex; align-items:center; justify-content:flex-end;
+    color:var(--faint); font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+    padding-right:4px; text-align:right;
+  }
+  .box{
+    flex:1; border:1.5px solid var(--ink); border-radius:6px; padding:11px 14px;
+    background:#FBFCFD;
+  }
+  .box .t{font-weight:700; color:var(--ink)}
+  .box .d{color:var(--ink-soft); font-size:11.5px; margin-top:2px}
+  .box.iface{border-color:var(--teal); border-style:dashed; background:#F1F8F7}
+  .box.iface .t{color:var(--teal)}
+  .box.now{border-color:var(--brass); background:#FBF6EC}
+  .box.now .t{color:var(--brass)}
+  .box.future{border-style:dashed; color:var(--faint); background:#FAFBFC}
+  .box.future .t{color:var(--faint)}
+  .box.side{border-color:var(--line); background:#FAFBFC}
+  .split{display:flex; gap:14px}
+  .split .box{flex:1}
+  .arrow{text-align:center; color:var(--faint); margin:2px 0; font-size:14px}
+
+  /* ---------- contract signature block ---------- */
+  .iface-card{
+    background:var(--code-bg); border-radius:9px; padding:22px 24px; margin:18px 0;
+    font-family:var(--mono); font-size:13px; color:var(--code-fg); line-height:1.75;
+    border:1px solid #1f2832;
+  }
+  .iface-card .ih{color:var(--teal); font-weight:600}
+  .iface-card .m{color:#7FB7E8}
+  .iface-card .ty{color:#E0A458}
+  .iface-card .cm{color:var(--code-faint)}
+
+  /* ---------- checklist ---------- */
+  ul.check{list-style:none; padding:0; margin:16px 0}
+  ul.check li{
+    position:relative; padding:9px 0 9px 34px; border-bottom:1px solid var(--line);
+  }
+  ul.check li::before{
+    content:"✓"; position:absolute; left:6px; top:9px; color:var(--brass);
+    font-weight:700;
+  }
+  ul.plain{padding-left:20px} ul.plain li{margin:6px 0}
+
+  footer{border-top:1px solid var(--line); background:var(--surface)}
+  footer .wrap{padding:28px 24px; display:flex; flex-wrap:wrap; gap:8px 22px;
+    font-family:var(--mono); font-size:12px; color:var(--faint)}
+
+  @media(max-width:860px){
+    .grid{grid-template-columns:1fr; gap:0; padding:30px 0 70px}
+    nav.toc{position:static; margin-bottom:34px; border-bottom:1px solid var(--line); padding-bottom:20px}
+    nav.toc ol{columns:2; column-gap:24px}
+    .layer{flex-direction:column; gap:6px}
+    .lname{width:auto; justify-content:flex-start; text-align:left; padding-right:0}
+    .split{flex-direction:column}
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap hero-inner">
+    <p class="eyebrow">Engineering Handoff · 開發交接</p>
+    <h1>MailKeeper<span class="dot">.</span></h1>
+    <p class="lede">登入 Outlook.com IMAP、讀取收件匣標題、依規則自動整理郵件的 Python CLI 工具。本文件供 <b>Claude Code</b> 接續開發 —— 涵蓋架構、模組契約、約定與後續工作。</p>
+    <div class="meta">
+      <span class="chip"><b>v0.1.0</b></span>
+      <span class="chip">Python <b>≥ 3.10</b></span>
+      <span class="chip">deps: <b>msal</b> + stdlib</span>
+      <span class="chip green">build <b>passing</b></span>
+      <span class="chip">更新 <b>2026-06-20</b></span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap grid">
+
+  <nav class="toc">
+    <p class="label">Contents</p>
+    <ol>
+      <li><a href="#overview">專案概覽</a></li>
+      <li><a href="#status">目前狀態</a></li>
+      <li><a href="#architecture">系統架構</a></li>
+      <li><a href="#contract">MailBackend 契約</a></li>
+      <li><a href="#modules">模組參考</a></li>
+      <li><a href="#model">領域模型</a></li>
+      <li><a href="#setup">環境設定</a></li>
+      <li><a href="#run">建置與執行</a></li>
+      <li><a href="#conventions">開發規範</a></li>
+      <li><a href="#testing">測試策略</a></li>
+      <li><a href="#roadmap">後續工作</a></li>
+      <li><a href="#handoff">交接清單</a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <!-- 1 -->
+    <section id="overview">
+      <p class="sec-eyebrow">01 · Overview</p>
+      <h2>專案概覽</h2>
+      <p>MailKeeper 是一支命令列工具，登入個人 Outlook.com 信箱，列出收件匣所有郵件的標題，並依使用者定義的規則自動整理（搬移資料夾、標記已讀、加旗標）。</p>
+      <p>整個設計只圍繞一個核心想法：<b>郵件存取層是可替換的</b>。所有 IMAP 協定細節都封裝在單一模組，整理邏輯只依賴一個抽象介面 <code>MailBackend</code>。因此未來要把底層從 IMAP 換成 Microsoft Graph API，整理層一行都不必動。Claude Code 接手時，請把這條界線視為不可破壞的約束。</p>
+      <div class="note warn">
+        <span class="tag">關鍵前提 · 不可繞過</span>
+        Outlook.com 已停用 Basic Auth（帳號＋密碼直連）。IMAP 一律走 <b>OAuth2 / XOAUTH2</b>，必須先在 Azure / Microsoft Entra 註冊應用程式取得 <code>CLIENT_ID</code>。任何「改用帳密登入」的修改都會失效，請勿嘗試。
+      </div>
+    </section>
+
+    <!-- 2 -->
+    <section id="status">
+      <p class="sec-eyebrow">02 · Status</p>
+      <h2>目前狀態</h2>
+      <p>v0.1.0 已打包為正式 Python package（src layout），可建置 wheel 與 sdist，並在乾淨虛擬環境驗證安裝、匯入與 console 指令註冊皆正常。</p>
+      <table class="tbl">
+        <thead><tr><th>項目</th><th>狀態</th><th>說明</th></tr></thead>
+        <tbody>
+          <tr><td>OAuth2 認證</td><td><span class="pill p2">完成</span></td><td>MSAL device code flow，token 快取 + 靜默更新</td></tr>
+          <tr><td>IMAP 讀取標題</td><td><span class="pill p2">完成</span></td><td><code>list_inbox_headers()</code>，只抓 header 不下載整封</td></tr>
+          <tr><td>整理動作</td><td><span class="pill p2">完成</span></td><td>move / mark_read / flag，含 MOVE 後備方案</td></tr>
+          <tr><td>規則引擎</td><td><span class="pill p2">完成</span></td><td>條件式 Rule + dry-run 保護</td></tr>
+          <tr><td>套件化</td><td><span class="pill p2">完成</span></td><td>pyproject.toml、console 指令、wheel/sdist</td></tr>
+          <tr><td>CLI 參數</td><td><span class="pill p3">未做</span></td><td>尚無 argparse；見後續工作 R1</td></tr>
+          <tr><td>自動化測試</td><td><span class="pill p3">未做</span></td><td>已驗證 FakeBackend 可行，待補 pytest</td></tr>
+          <tr><td>Graph 後端</td><td><span class="pill p3">未做</span></td><td>介面已備妥，待實作；見 R3</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 3 -->
+    <section id="architecture">
+      <p class="sec-eyebrow">03 · Architecture</p>
+      <h2>系統架構</h2>
+      <p>四層由上而下：CLI 組裝 → 整理引擎 → <b>抽象介面</b> → 具體後端。認證模組獨立供應 token。虛線框＝抽象或尚未實作；棕色＝目前實作；綠色＝穩定的抽象界線。</p>
+
+      <div class="diagram" aria-label="架構圖">
+        <div class="layer">
+          <div class="lname">entry</div>
+          <div class="box"><div class="t">cli.py · __main__.py</div><div class="d">build_rules() · main() · 指令 mailkeeper / python -m mailkeeper</div></div>
+        </div>
+        <div class="arrow">▼</div>
+        <div class="layer">
+          <div class="lname">logic</div>
+          <div class="box"><div class="t">organizer.py — MailOrganizer</div><div class="d">套用 Rule，只透過下方介面操作信箱；不認識 imaplib</div></div>
+        </div>
+        <div class="arrow">▼</div>
+        <div class="layer">
+          <div class="lname">contract</div>
+          <div class="box iface"><div class="t">MailBackend （Protocol）</div><div class="d">穩定界線：list_inbox_headers · ensure_folder · move · mark_read · flag</div></div>
+        </div>
+        <div class="arrow">▼</div>
+        <div class="layer">
+          <div class="lname">backend</div>
+          <div class="split">
+            <div class="box now"><div class="t">imap_client.py ✓ 目前</div><div class="d">OutlookIMAPClient — 所有 imaplib 操作封裝於此</div></div>
+            <div class="box future"><div class="t">graph_client.py ◦ 未來</div><div class="d">GraphMailClient — 實作同一介面即可替換</div></div>
+          </div>
+        </div>
+        <div class="arrow">supplies token ▲</div>
+        <div class="layer">
+          <div class="lname">auth</div>
+          <div class="box side"><div class="t">auth.py — get_access_token()</div><div class="d">MSAL OAuth2 / XOAUTH2 · token_cache.bin</div></div>
+        </div>
+      </div>
+
+      <div class="note">
+        <span class="tag">不變式 · invariant</span>
+        <code>imaplib</code> 只能出現在 <code>imap_client.py</code>。<code>organizer.py</code> 與 <code>cli.py</code> 只能依賴 <code>MailBackend</code> 介面與 <code>MailHeader</code> 資料類別。新增供應商＝新增一個實作該介面的類別，不改上層。
+      </div>
+    </section>
+
+    <!-- 4 -->
+    <section id="contract">
+      <p class="sec-eyebrow">04 · Contract</p>
+      <h2>MailBackend 契約</h2>
+      <p>這是整個專案的樞紐。任何郵件後端（IMAP、Graph、未來的測試替身）都必須提供以下方法。簽章定義於 <code>organizer.py</code>，請勿隨意更動；若要擴充，採新增方法而非破壞既有簽章。</p>
+
+      <div class="iface-card">
+<span class="cm"># organizer.py</span><br>
+<span class="ih">class</span> MailBackend(<span class="ty">Protocol</span>):<br>
+&nbsp;&nbsp;<span class="m">def</span> list_inbox_headers(self, mailbox: <span class="ty">str</span> = <span class="ty">"INBOX"</span>) <span class="cm">-> list[MailHeader]</span><br>
+&nbsp;&nbsp;<span class="m">def</span> ensure_folder(self, folder: <span class="ty">str</span>) <span class="cm">-> None</span><br>
+&nbsp;&nbsp;<span class="m">def</span> move(self, uid: <span class="ty">str</span>, dest_folder: <span class="ty">str</span>, mailbox: <span class="ty">str</span> = <span class="ty">"INBOX"</span>) <span class="cm">-> None</span><br>
+&nbsp;&nbsp;<span class="m">def</span> mark_read(self, uid: <span class="ty">str</span>, mailbox: <span class="ty">str</span> = <span class="ty">"INBOX"</span>) <span class="cm">-> None</span><br>
+&nbsp;&nbsp;<span class="m">def</span> flag(self, uid: <span class="ty">str</span>, mailbox: <span class="ty">str</span> = <span class="ty">"INBOX"</span>) <span class="cm">-> None</span>
+      </div>
+
+      <table class="tbl">
+        <thead><tr><th>方法</th><th>用途</th><th>實作要點</th></tr></thead>
+        <tbody>
+          <tr><td><code>list_inbox_headers</code></td><td>列出指定信箱所有郵件標題</td><td>回傳 <code>MailHeader</code> 串列；IMAP 版只抓 <code>HEADER.FIELDS (SUBJECT FROM DATE)</code></td></tr>
+          <tr><td><code>ensure_folder</code></td><td>確保目標資料夾存在</td><td>已存在可忽略錯誤（IMAP 回 NO）</td></tr>
+          <tr><td><code>move</code></td><td>把郵件搬到資料夾</td><td>IMAP 用 UID MOVE，失敗時 copy + \Deleted + expunge</td></tr>
+          <tr><td><code>mark_read</code></td><td>標記為已讀</td><td>IMAP <code>+FLAGS (\Seen)</code></td></tr>
+          <tr><td><code>flag</code></td><td>加上旗標</td><td>IMAP <code>+FLAGS (\Flagged)</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 5 -->
+    <section id="modules">
+      <p class="sec-eyebrow">05 · Modules</p>
+      <h2>模組參考</h2>
+      <pre><code>mailkeeper/
+├── pyproject.toml          <span class="c"># 套件設定 + console 指令</span>
+├── CHANGELOG.md            <span class="c"># 版本紀錄（真實交付日期）</span>
+├── requirements.txt
+├── .gitignore              <span class="c"># 已排除 token_cache.bin</span>
+└── src/mailkeeper/
+    ├── __init__.py         <span class="c"># 對外 API + __version__</span>
+    ├── __main__.py         <span class="c"># python -m mailkeeper</span>
+    ├── config.py           <span class="c"># 集中設定</span>
+    ├── auth.py             <span class="c"># OAuth2 認證</span>
+    ├── imap_client.py      <span class="c"># IMAP 隔離層（核心）</span>
+    ├── organizer.py        <span class="c"># 規則引擎 + MailBackend 介面</span>
+    └── cli.py              <span class="c"># 進入點</span></code></pre>
+
+      <table class="tbl">
+        <thead><tr><th>模組</th><th>對外重點</th><th>職責 / 注意</th></tr></thead>
+        <tbody>
+          <tr><td><code>config.py</code></td><td>CLIENT_ID · EMAIL_ACCOUNT · AUTHORITY · SCOPES · IMAP_HOST/PORT · TOKEN_CACHE_PATH</td><td>使用者唯一需修改處。<code>AUTHORITY</code> 個人帳號用 <code>consumers</code>；<code>SCOPES</code> 含 <code>IMAP.AccessAsUser.All</code>，勿手動加 offline_access</td></tr>
+          <tr><td><code>auth.py</code></td><td><code>get_access_token() -> str</code></td><td>先嘗試 <code>acquire_token_silent</code>，失敗才走 device code flow；快取序列化到 <code>token_cache.bin</code></td></tr>
+          <tr><td><code>imap_client.py</code></td><td><code>OutlookIMAPClient</code> · <code>MailHeader</code></td><td>唯一可使用 <code>imaplib</code> 之處。支援 <code>with</code>；XOAUTH2 認證字串用 <code>\x01</code> 分隔；<code>_decode()</code> 處理 MIME encoded-word 避免中文亂碼</td></tr>
+          <tr><td><code>organizer.py</code></td><td><code>MailBackend</code> · <code>Rule</code> · <code>MailOrganizer</code> · <code>from_contains</code> · <code>subject_contains</code></td><td>整理需求變動主要改這裡。<code>run(dry_run=True)</code> 預設只試跑</td></tr>
+          <tr><td><code>cli.py</code></td><td><code>build_rules()</code> · <code>main()</code></td><td>組裝 auth + client + organizer。規則範例寫在 <code>build_rules()</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 6 -->
+    <section id="model">
+      <p class="sec-eyebrow">06 · Domain Model</p>
+      <h2>領域模型</h2>
+      <p>上層只看得到這兩個資料類別，看不到任何 IMAP response，這是隔離得以成立的關鍵。</p>
+      <pre><code><span class="k">@dataclass</span>(frozen=<span class="k">True</span>)
+<span class="k">class</span> <span class="fn">MailHeader</span>:
+    uid: str          <span class="c"># IMAP UID（後端內部識別）</span>
+    subject: str      <span class="c"># 已解碼標題</span>
+    sender: str       <span class="c"># From</span>
+    date: str         <span class="c"># Date 原字串</span>
+
+<span class="k">@dataclass</span>
+<span class="k">class</span> <span class="fn">Rule</span>:
+    name: str
+    match: Callable[[MailHeader], bool]   <span class="c"># 命中條件</span>
+    dest_folder: str | None = <span class="k">None</span>      <span class="c"># 要搬去的資料夾</span>
+    mark_read: bool = <span class="k">False</span>
+    flag: bool = <span class="k">False</span></code></pre>
+      <div class="note">
+        <span class="tag">設計取捨</span>
+        <code>uid</code> 是 IMAP 特有概念。若日後改用 Graph（用 message id），可保留 <code>uid</code> 欄位語意為「後端不透明識別字」，介面不變即可相容。
+      </div>
+    </section>
+
+    <!-- 7 -->
+    <section id="setup">
+      <p class="sec-eyebrow">07 · One-time Setup</p>
+      <h2>環境設定（Azure 註冊）</h2>
+      <p>跑起來前必做一次，否則無法登入：</p>
+      <ul class="plain">
+        <li>Microsoft Entra 系統管理中心 → <b>應用程式註冊 → 新增註冊</b></li>
+        <li>支援帳戶類型選 <b>「個人 Microsoft 帳戶」</b>（或含工作/學校帳戶）</li>
+        <li>不需填 redirect URI（採 device code flow）</li>
+        <li>複製 <b>應用程式（用戶端）識別碼</b> → 填入 <code>config.py</code> 的 <code>CLIENT_ID</code></li>
+        <li><b>驗證 → 允許公用用戶端流程 → 是</b></li>
+        <li><b>API 權限</b>：授予委派權限 <code>IMAP.AccessAsUser.All</code>（範圍 <code>outlook.office.com</code>）</li>
+      </ul>
+    </section>
+
+    <!-- 8 -->
+    <section id="run">
+      <p class="sec-eyebrow">08 · Build &amp; Run</p>
+      <h2>建置與執行</h2>
+      <pre><code><span class="c"># 開發模式安裝（可邊改邊跑）</span>
+pip install -e .
+
+<span class="c"># 填好 config.py 的 CLIENT_ID 後執行</span>
+mailkeeper
+<span class="c"># 或</span>
+python -m mailkeeper
+
+<span class="c"># 打包</span>
+python -m build        <span class="c"># 產生 dist/*.whl 與 *.tar.gz</span></code></pre>
+      <p>首次執行會印出「開啟網址並輸入代碼」的 device code 提示，登入後 token 快取，之後免登入。整理動作預設 <code>dry_run=True</code> 只顯示不變更；確認規則無誤後，把 <code>cli.py</code> 內 <code>organizer.run(dry_run=False)</code> 打開才會真的動信箱。</p>
+    </section>
+
+    <!-- 9 -->
+    <section id="conventions">
+      <p class="sec-eyebrow">09 · Conventions</p>
+      <h2>開發規範</h2>
+      <ul class="plain">
+        <li><b>隔離不可破</b>：<code>imaplib</code> 僅限 <code>imap_client.py</code>；上層只依賴 <code>MailBackend</code> 與 <code>MailHeader</code>。</li>
+        <li><b>新供應商＝新類別</b>：實作 <code>MailBackend</code> 五個方法即可，不改 organizer/cli。</li>
+        <li><b>語言慣例</b>：識別字、型別、commit 用英文；說明性註解可用繁中（人面向）。</li>
+        <li><b>型別註解</b>：全檔 <code>from __future__ import annotations</code>；維持 mypy 友善。</li>
+        <li><b>版本紀律</b>：每次發版更新 <code>CHANGELOG.md</code>，版本標題使用<u>真實交付日期</u>，不要造假日期。</li>
+        <li><b>機密</b>：<code>token_cache.bin</code> 含有效憑證，已列入 <code>.gitignore</code>，絕不提交。</li>
+        <li><b>破壞性動作預設關閉</b>：涉及搬移/刪除的新功能，預設走 dry-run，由使用者明確開啟。</li>
+      </ul>
+    </section>
+
+    <!-- 10 -->
+    <section id="testing">
+      <p class="sec-eyebrow">10 · Testing</p>
+      <h2>測試策略</h2>
+      <p>整理層可完全離線測試 —— 用實作 <code>MailBackend</code> 的假後端注入 <code>MailOrganizer</code>，不需真的連 IMAP。此模式已驗證可行，建議 Claude Code 以此為 pytest 基礎：</p>
+      <pre><code><span class="k">class</span> <span class="fn">FakeBackend</span>:
+    <span class="k">def</span> <span class="fn">__init__</span>(self): self.actions = []
+    <span class="k">def</span> <span class="fn">list_inbox_headers</span>(self, mailbox=<span class="s">"INBOX"</span>):
+        <span class="k">return</span> [MailHeader(<span class="s">"1"</span>, <span class="s">"Weekly Newsletter"</span>, <span class="s">"news@x.com"</span>, <span class="s">"Mon"</span>)]
+    <span class="k">def</span> <span class="fn">ensure_folder</span>(self, f): self.actions.append((<span class="s">"folder"</span>, f))
+    <span class="k">def</span> <span class="fn">move</span>(self, uid, dest, mailbox=<span class="s">"INBOX"</span>): self.actions.append((<span class="s">"move"</span>, uid, dest))
+    <span class="k">def</span> <span class="fn">mark_read</span>(self, uid, mailbox=<span class="s">"INBOX"</span>): self.actions.append((<span class="s">"read"</span>, uid))
+    <span class="k">def</span> <span class="fn">flag</span>(self, uid, mailbox=<span class="s">"INBOX"</span>): self.actions.append((<span class="s">"flag"</span>, uid))</code></pre>
+      <p>優先補的測試：規則比對器（<code>from_contains</code>/<code>subject_contains</code>）、<code>_decode()</code> 對 encoded-word 標題的解碼、<code>MailOrganizer.run()</code> 在 dry-run 與實跑下產生的動作序列。</p>
+    </section>
+
+    <!-- 11 -->
+    <section id="roadmap">
+      <p class="sec-eyebrow">11 · Roadmap</p>
+      <h2>後續工作</h2>
+      <p>建議的接續順序，優先級越高越該先做。每項完成後請更新 <code>CHANGELOG.md</code> 並升版。</p>
+      <table class="tbl">
+        <thead><tr><th>ID</th><th>任務</th><th>優先</th><th>重點</th></tr></thead>
+        <tbody>
+          <tr><td>R1</td><td>CLI 參數化</td><td><span class="pill p1">高</span></td><td>加 argparse：<code>--version</code>、<code>--run</code>（關掉 dry-run）、<code>--list</code>（只列標題）、<code>--mailbox</code></td></tr>
+          <tr><td>R2</td><td>pytest 測試套件</td><td><span class="pill p1">高</span></td><td>以 FakeBackend 為基礎，涵蓋規則、解碼、run() 動作序列</td></tr>
+          <tr><td>R3</td><td>Microsoft Graph 後端</td><td><span class="pill p2">中</span></td><td>新增 <code>graph_client.py</code> 實作 <code>MailBackend</code>；Graph 原生支援資料夾/分類，更適合 Outlook 專用情境</td></tr>
+          <tr><td>R4</td><td>設定外部化</td><td><span class="pill p2">中</span></td><td>CLIENT_ID / EMAIL 改讀環境變數或 <code>.env</code>；偵測未填的佔位字串並報錯</td></tr>
+          <tr><td>R5</td><td>規則外部化</td><td><span class="pill p2">中</span></td><td>規則改由 YAML/JSON 載入，免改程式即可調整整理需求</td></tr>
+          <tr><td>R6</td><td>logging 取代 print</td><td><span class="pill p3">低</span></td><td>結構化輸出、可調等級</td></tr>
+          <tr><td>R7</td><td>大量信箱效能</td><td><span class="pill p3">低</span></td><td>UID 範圍批次 fetch、分頁；斷線重連與 token 過期重試</td></tr>
+        </tbody>
+      </table>
+      <div class="note">
+        <span class="tag">待人類決策</span>
+        若這支工具<b>只服務 Outlook</b>，R3 的 Graph 後端整理體驗更佳（原生資料夾搬移、分類標籤、伺服器端篩選）；若要<b>跨供應商通用</b>（Gmail/Yahoo），則維持 IMAP 為主。動工 R3 前請先向使用者確認方向。
+      </div>
+    </section>
+
+    <!-- 12 -->
+    <section id="handoff">
+      <p class="sec-eyebrow">12 · Handoff Checklist</p>
+      <h2>Claude Code 交接清單</h2>
+      <p>接手後、動任何程式碼前，請逐項確認：</p>
+      <ul class="check">
+        <li>已讀 <code>README.md</code>、<code>CHANGELOG.md</code> 與本文件，理解 MailBackend 隔離原則。</li>
+        <li>確認 <code>imaplib</code> 只出現在 <code>imap_client.py</code>；任何新後端實作 <code>MailBackend</code> 介面。</li>
+        <li>採 TDD：行為變更前先補對應測試（FakeBackend 模式，免連網）。</li>
+        <li>破壞性動作（move/delete）預設 dry-run，由使用者明確開啟。</li>
+        <li>每次升版更新 <code>CHANGELOG.md</code>，標題用真實日期。</li>
+        <li>不修改、不提交 <code>token_cache.bin</code>。</li>
+        <li>動工 R3（Graph）前，先確認「Outlook 專用」或「跨供應商」方向。</li>
+      </ul>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span>MailKeeper v0.1.0</span>
+    <span>Handoff for Claude Code</span>
+    <span>Python ≥ 3.10 · msal</span>
+    <span>2026-06-20</span>
+  </div>
+</footer>
+
+</body>
+</html>
