@@ -34,24 +34,45 @@ class EncodingBoundStringIO:
 
 
 class FakeBackend:
-    """In-memory ``MailBackend`` for offline organizer/cli tests."""
+    """In-memory ``MailBackend`` for offline organizer/cli tests.
 
-    def __init__(self, headers: list[MailHeader] | None = None) -> None:
-        self._headers = (
-            headers
-            if headers is not None
-            else [MailHeader("1", "Weekly Newsletter", "news@x.com", "Mon")]
-        )
+    Accepts either a flat ``headers`` list (treated as INBOX, legacy) or a
+    ``folders`` dict mapping folder name -> list[MailHeader].
+    """
+
+    def __init__(
+        self,
+        headers: list[MailHeader] | None = None,
+        *,
+        folders: dict[str, list[MailHeader]] | None = None,
+    ) -> None:
+        if folders is not None:
+            self._folders = {k: list(v) for k, v in folders.items()}
+        elif headers is not None:
+            self._folders = {"INBOX": list(headers)}
+        else:
+            self._folders = {"INBOX": [MailHeader("1", "Weekly Newsletter", "news@x.com", "Mon")]}
         self.actions: list[tuple] = []
 
+    def list_folders(self) -> list[str]:
+        return list(self._folders.keys())
+
+    def list_headers(self, folder: str = "INBOX") -> list[MailHeader]:
+        return list(self._folders.get(folder, []))
+
     def list_inbox_headers(self, mailbox: str = "INBOX") -> list[MailHeader]:
-        return list(self._headers)
+        return self.list_headers(mailbox)
 
     def ensure_folder(self, folder: str) -> None:
         self.actions.append(("folder", folder))
+        self._folders.setdefault(folder, [])
 
     def move(self, uid: str, dest_folder: str, mailbox: str = "INBOX") -> None:
-        self.actions.append(("move", uid, dest_folder))
+        self.actions.append(("move", uid, dest_folder, mailbox))
+        src = self._folders.get(mailbox, [])
+        moved = [h for h in src if h.uid == uid]
+        self._folders[mailbox] = [h for h in src if h.uid != uid]
+        self._folders.setdefault(dest_folder, []).extend(moved)
 
     def mark_read(self, uid: str, mailbox: str = "INBOX") -> None:
         self.actions.append(("read", uid))
@@ -74,10 +95,29 @@ def fake_utf8_stdout() -> EncodingBoundStringIO:
 
 @pytest.fixture
 def make_backend():
-    def _make(headers: list[MailHeader] | None = None) -> FakeBackend:
-        return FakeBackend(headers)
+    def _make(
+        headers: list[MailHeader] | None = None,
+        *,
+        folders: dict[str, list[MailHeader]] | None = None,
+    ) -> FakeBackend:
+        return FakeBackend(headers, folders=folders)
 
     return _make
+
+
+@pytest.fixture
+def folder_backend(make_backend) -> FakeBackend:
+    """多資料夾假信箱：INBOX/Work/Archive，含特殊字元與空資料夾。"""
+    return make_backend(
+        folders={
+            "INBOX": [
+                MailHeader("10", "新年快樂 🎉, 與你", "寄件者 <a@x.com>", "Mon", "me@x.com"),
+                MailHeader("11", "Plain ASCII", "b@y.com", "Tue", "me@x.com"),
+            ],
+            "Work": [MailHeader("20", "週報", "boss@x.com", "Wed", "me@x.com")],
+            "Archive": [],
+        }
+    )
 
 
 @pytest.fixture
