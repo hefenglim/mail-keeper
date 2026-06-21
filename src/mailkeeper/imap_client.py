@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import base64
 import email
 import imaplib
 import re
@@ -32,6 +33,7 @@ class MailHeader:
     subject: str
     sender: str
     date: str
+    recipients: str = ""
 
 
 def _unfold(value: str) -> str:
@@ -65,6 +67,48 @@ def _decode(value: str | None) -> str:
         )
     except Exception:
         return value if isinstance(value, str) else ""
+
+
+def _decode_mutf7(name: str) -> str:
+    """解 IMAP modified-UTF-7 資料夾名稱（RFC 3501 §5.1.3）。"""
+    if "&" not in name:
+        return name
+    out: list[str] = []
+    i = 0
+    while i < len(name):
+        ch = name[i]
+        if ch != "&":
+            out.append(ch)
+            i += 1
+            continue
+        end = name.find("-", i + 1)
+        if end == -1:
+            out.append(name[i:])
+            break
+        chunk = name[i + 1 : end]
+        if chunk == "":
+            out.append("&")
+        else:
+            b64 = chunk.replace(",", "/")
+            b64 += "=" * ((4 - len(b64) % 4) % 4)
+            try:
+                out.append(base64.b64decode(b64).decode("utf-16-be"))
+            except Exception:
+                out.append(name[i : end + 1])
+        i = end + 1
+    return "".join(out)
+
+
+def _parse_folder_name(line: Any) -> str:
+    """從一條 IMAP LIST 回應取出資料夾名稱（處理引號與 modified-UTF-7）。"""
+    s = line.decode() if isinstance(line, (bytes, bytearray)) else str(line)
+    m = re.search(r'"((?:[^"\\]|\\.)*)"\s*$', s)
+    if m:
+        raw = m.group(1).replace('\\"', '"').replace("\\\\", "\\")
+    else:
+        parts = s.split()
+        raw = parts[-1] if parts else ""
+    return _decode_mutf7(raw)
 
 
 class OutlookIMAPClient:
@@ -114,9 +158,22 @@ class OutlookIMAPClient:
         return self._imap
 
     # ---------- 讀取 ----------
-    def list_inbox_headers(self, mailbox: str = "INBOX") -> list[MailHeader]:
-        """讀取指定信箱所有郵件的標題 (只抓 header，不下載整封信，效率較佳)。"""
-        self._conn.select(mailbox, readonly=True)
+    def list_folders(self) -> list[str]:
+        """列舉信箱所有資料夾名稱。"""
+        typ, data = self._conn.list()
+        folders: list[str] = []
+        if typ == "OK" and data:
+            for line in data:
+                if not line:
+                    continue
+                name = _parse_folder_name(line)
+                if name:
+                    folders.append(name)
+        return folders
+
+    def list_headers(self, folder: str = "INBOX") -> list[MailHeader]:
+        """讀取指定資料夾所有郵件的標題 (只抓 header，不下載整封信，效率較佳)。"""
+        self._conn.select(folder, readonly=True)
         typ, data = self._conn.uid("search", None, "ALL")  # type: ignore[arg-type]  # IMAP SEARCH 允許 charset=None
         if typ != "OK" or not data or data[0] is None:
             return []
@@ -124,7 +181,7 @@ class OutlookIMAPClient:
         headers: list[MailHeader] = []
         for uid in data[0].split():
             typ, msg_data = self._conn.uid(
-                "fetch", uid, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE)])"
+                "fetch", uid, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM TO DATE)])"
             )
             if typ != "OK" or not msg_data or msg_data[0] is None:
                 continue
@@ -135,9 +192,14 @@ class OutlookIMAPClient:
                     subject=_decode(msg.get("Subject")),
                     sender=_decode(msg.get("From")),
                     date=_decode(msg.get("Date")),
+                    recipients=_decode(msg.get("To")),
                 )
             )
         return headers
+
+    def list_inbox_headers(self, mailbox: str = "INBOX") -> list[MailHeader]:
+        """相容保留：等同 list_headers(mailbox)。"""
+        return self.list_headers(mailbox)
 
     # ---------- 整理動作 ----------
     def ensure_folder(self, folder: str) -> None:

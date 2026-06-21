@@ -70,6 +70,25 @@ python -m mailkeeper
 若實際登入的帳號與 `config.json` 的 `email` 不一致，MailKeeper 會主動詢問你要如何處理（用登入帳號／保留設定／中止）。
 預設 `dry_run=True` 只顯示會做什麼、不會真的變動信箱；確認規則無誤後，把 `cli.py` 裡的 `organizer.run(dry_run=False)` 打開。
 
+## 選單與 CSV 功能（v0.4.0）
+
+直接執行 `mailkeeper`（互動）會出現選單；三個功能也可用子指令（適合自動化）：
+
+```bash
+# 1) 匯出某資料夾的「分類工作表」CSV
+#    欄位：uid,current_folder,target_folder,date,from,to,subject
+mailkeeper export-worksheet --folder INBOX --out worksheet.csv
+
+# 2) 匯出所有資料夾清單（供填寫 target_folder 參考）
+mailkeeper export-folders --out folders.csv
+
+# 3) 編輯 worksheet.csv 的 target_folder 後，檢查 → 確認 → 搬移
+mailkeeper classify --in worksheet.csv          # 預設只出檢查報告（不搬）
+mailkeeper classify --in worksheet.csv --run    # 確認無誤後實際搬移
+```
+
+工作流：人或 AI 在工具外編輯 `worksheet.csv` 的 `target_folder`（參考 `folders.csv`），功能3 對「有變動」的列產生可行性檢查報告，確認後才依 CSV 搬移分類。搬移為破壞性動作、預設 dry-run。
+
 ## 當套件匯入使用
 
 ```python

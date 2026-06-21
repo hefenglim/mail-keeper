@@ -1,10 +1,12 @@
-"""MailKeeper CLI —— 進入點：登入 → 列出收件匣標題 → 套用整理規則。"""
+"""MailKeeper CLI —— 啟動選單 / 子指令：匯出工作表、匯出資料夾清單、依 CSV 分類。"""
 from __future__ import annotations
 
+import argparse
+import contextlib
 import sys
-from typing import Callable
+from typing import Callable, Iterator
 
-from . import config_store, console
+from . import classifier, config_store, console, csv_io, menu
 from .auth import get_access_token
 from .imap_client import BackendError, OutlookIMAPClient
 from .organizer import MailBackend, MailOrganizer, Rule, from_contains, subject_contains
@@ -34,7 +36,6 @@ def run_listing(backend: MailBackend, rules: list[Rule], *, dry_run: bool = True
     for h in headers:
         console.safe_print(f"{h.date} | {h.sender} | {h.subject}")
 
-    # 套用整理規則 (預設 dry_run=True，確認無誤後改 False 才會真的動作)
     organizer = MailOrganizer(backend, rules)
     organizer.run(dry_run=dry_run)
 
@@ -90,8 +91,9 @@ def _prompt_choice() -> str:
     return input("請輸入選項編號 [1-4]：").strip()
 
 
-def _run() -> None:
-    """實際流程：載入設定 → 認證 → 帳號確認 → 列出並整理。可被測試替換 / 注入失敗。"""
+@contextlib.contextmanager
+def _connect() -> Iterator[MailBackend]:
+    """載入設定 → 缺檔則 bootstrap 並結束 → 認證 → 帳號確認 → 連線，yield 後端。"""
     try:
         cfg = config_store.load()
     except config_store.ConfigNotFound:
@@ -115,15 +117,158 @@ def _run() -> None:
     with OutlookIMAPClient(
         email, token, host=cfg.imap_host, port=cfg.imap_port, timeout=cfg.timeout
     ) as client:
+        yield client
+
+
+def _run() -> None:
+    """相容保留（feature 001/002）：載入設定 → 認證 → 列出並整理。"""
+    with _connect() as client:
         run_listing(client, build_rules(), dry_run=True)
 
 
-def main() -> None:
+# ---------- 三個 CSV 功能（皆接受注入式 backend，便於離線測試） ----------
+
+def export_worksheet(backend: MailBackend, folder: str, out: str) -> None:
+    headers = backend.list_headers(folder)
+    csv_io.write_worksheet(headers, folder, out)
+    console.safe_print(f"已將資料夾「{folder}」的 {len(headers)} 封郵件匯出到 {out}")
+
+
+def export_folders(backend: MailBackend, out: str) -> None:
+    folders = backend.list_folders()
+    csv_io.write_folders(folders, out)
+    console.safe_print(f"已匯出 {len(folders)} 個資料夾到 {out}")
+
+
+def _print_report(items: list[classifier.ReportItem]) -> None:
+    moves = [it for it in items if it.status == classifier.CANDIDATE]
+    skips = [it for it in items if it.status == classifier.SKIP]
+    infes = [it for it in items if it.status == classifier.INFEASIBLE]
+    console.safe_print(
+        f"檢查報告：將搬移 {len(moves)}、無變動 {len(skips)}、不可行 {len(infes)}"
+    )
+    for it in moves:
+        console.safe_print(
+            f"  將搬移：{it.row.uid}@{it.row.current_folder} → {it.row.target_folder}"
+        )
+    for it in infes:
+        console.safe_print(
+            f"  不可行：{it.row.uid}@{it.row.current_folder} → {it.row.target_folder}（{it.reason}）",
+            file=sys.stderr,
+        )
+
+
+def _prompt_yes_no() -> bool:
+    return input("確認執行搬移？(y/N)：").strip().lower() in ("y", "yes")
+
+
+def classify(
+    backend: MailBackend,
+    in_path: str,
+    *,
+    run: bool,
+    interactive: bool,
+    ask: Callable[[], bool] | None = None,
+) -> None:
+    rows = csv_io.read_worksheet(in_path)
+    items = classifier.build_report(backend, rows)
+    _print_report(items)
+    if not classifier.candidates(items):
+        console.safe_print("沒有需要搬移的列（無變動或皆不可行）。")
+        return
+
+    proceed = run
+    if not proceed and interactive:
+        proceed = (ask or _prompt_yes_no)()
+    if not proceed:
+        console.safe_print("（預覽）未搬移。確認無誤後加 --run，或於互動中輸入 y 執行。")
+        return
+
+    results = classifier.execute(backend, items)
+    ok = sum(1 for r in results if r.ok)
+    console.safe_print(f"完成：成功搬移 {ok} / {len(results)}。")
+    for r in results:
+        if not r.ok:
+            console.safe_print(
+                f"  失敗：{r.row.uid}@{r.row.current_folder} → {r.row.target_folder}：{r.error}",
+                file=sys.stderr,
+            )
+
+
+# ---------- 互動選單 ----------
+
+def _menu_export_worksheet(backend: MailBackend) -> None:
+    folders = backend.list_folders()
+    for i, name in enumerate(folders, 1):
+        console.safe_print(f"  {i}. {name}")
+    sel = input("選擇要匯出的資料夾編號：").strip()
+    if not (sel.isdigit() and 1 <= int(sel) <= len(folders)):
+        console.safe_print("無效的資料夾選擇。", file=sys.stderr)
+        return
+    folder = folders[int(sel) - 1]
+    out = input("輸出 CSV 路徑 [worksheet.csv]：").strip() or "worksheet.csv"
+    export_worksheet(backend, folder, out)
+
+
+def _menu_export_folders(backend: MailBackend) -> None:
+    out = input("輸出 CSV 路徑 [folders.csv]：").strip() or "folders.csv"
+    export_folders(backend, out)
+
+
+def _menu_classify(backend: MailBackend) -> None:
+    in_path = input("工作表 CSV 路徑 [worksheet.csv]：").strip() or "worksheet.csv"
+    classify(backend, in_path, run=False, interactive=True)
+
+
+def _menu_options(backend: MailBackend) -> list[tuple[str, Callable[[], None]]]:
+    return [
+        ("匯出資料夾的所有電子郵件列表（功能1）", lambda: _menu_export_worksheet(backend)),
+        ("匯出資料夾清單（功能2）", lambda: _menu_export_folders(backend)),
+        ("依工作表分類（功能3）", lambda: _menu_classify(backend)),
+    ]
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="mailkeeper", description="Outlook 郵件 CSV 匯出/分類")
+    sub = parser.add_subparsers(dest="command")
+
+    p1 = sub.add_parser("export-worksheet", help="匯出某資料夾的分類工作表 CSV")
+    p1.add_argument("--folder", required=True, help="來源資料夾")
+    p1.add_argument("--out", default="worksheet.csv", help="輸出路徑")
+
+    p2 = sub.add_parser("export-folders", help="匯出所有資料夾清單 CSV")
+    p2.add_argument("--out", default="folders.csv", help="輸出路徑")
+
+    p3 = sub.add_parser("classify", help="依工作表 CSV 檢查並搬移")
+    p3.add_argument("--in", dest="in_path", required=True, help="工作表 CSV 路徑")
+    p3.add_argument("--run", action="store_true", help="確認後實際搬移（預設只做檢查報告）")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
     console.setup()
+    parser = _build_parser()
+    args = parser.parse_args(argv)
     try:
-        _run()
+        if args.command == "export-worksheet":
+            with _connect() as backend:
+                export_worksheet(backend, args.folder, args.out)
+        elif args.command == "export-folders":
+            with _connect() as backend:
+                export_folders(backend, args.out)
+        elif args.command == "classify":
+            interactive = sys.stdin.isatty() and sys.stdout.isatty()
+            with _connect() as backend:
+                classify(backend, args.in_path, run=args.run, interactive=interactive)
+        else:  # 無子指令
+            if sys.stdin.isatty() and sys.stdout.isatty():
+                with _connect() as backend:
+                    menu.run(_menu_options(backend))
+            else:
+                parser.print_help(sys.stderr)
+                raise SystemExit(2)
     except (RuntimeError, BackendError, OSError) as exc:
-        # 已知失敗 (認證/IMAP/網路/逾時/設定)：乾淨訊息 + 非零碼，不噴 traceback。
+        # 已知失敗 (認證/IMAP/網路/逾時/設定/CSV)：乾淨訊息 + 非零碼，不噴 traceback。
         console.safe_print(f"MailKeeper 無法完成：{exc}", file=sys.stderr)
         raise SystemExit(1)
     except Exception as exc:  # 未預期錯誤：不噴 traceback、不外洩內容 (含 token)
