@@ -74,3 +74,20 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+          body: |
+            ## 安裝 / 更新 MailKeeper ${{ github.ref_name }}
+
+            從下方 **Assets** 下載 `mailkeeper-*-py3-none-any.whl`，再用 pip 安裝（需 Python ≥ 3.10）：
+
+            ```bash
+            pip install --user mailkeeper-*-py3-none-any.whl
+            ```
+
+            或直接從本 Release 安裝（把版本換成本頁的標籤，例如 0.4.0）：
+
+            ```bash
+            pip install --user https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mailkeeper-<版本>-py3-none-any.whl
+            ```
+
+            首次執行 `mailkeeper` 會在「目前工作目錄」產生 `config.json` 範本；填入 `client_id` 與 `email` 後再執行一次即可。
+            選單 / 三個 CSV 子指令（`export-worksheet` / `export-folders` / `classify`）用法見 README。
