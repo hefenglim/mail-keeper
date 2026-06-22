@@ -1,6 +1,6 @@
 # MailKeeper
 
-替你看管收件匣 —— 登入 Outlook.com IMAP、讀取所有郵件標題，並依規則自動整理的 Python 工具。
+替你看管收件匣 —— 登入 Outlook.com IMAP、讀取郵件標題、依規則自動整理的 Python 工具。自 v0.4.0 起提供互動選單與三個 CSV 功能：匯出分類工作表、匯出資料夾清單、依 CSV 檢查並搬移分類。
 
 > ⚠️ Outlook.com 已停用 Basic Auth（帳密直連）。本工具一律走 **OAuth2 / XOAUTH2**，需先註冊一個 Azure 應用程式。
 
@@ -20,7 +20,10 @@ mailkeeper/
     ├── auth.py             # OAuth2 認證（MSAL device code flow + token 快取）
     ├── imap_client.py      # 所有 IMAP 連線與操作封裝在此（核心隔離模組）
     ├── organizer.py        # 整理規則引擎；只依賴抽象介面 MailBackend
-    └── cli.py              # 進入點，組裝上述模組
+    ├── csv_io.py           # 工作表/資料夾清單 CSV 讀寫（固定英文表頭、UTF-8、標準跳脫）
+    ├── classifier.py       # 功能3 分類引擎（檢查報告 / 確認後搬移，只依賴 MailBackend）
+    ├── menu.py             # 互動選單路由
+    └── cli.py              # 進入點，組裝上述模組（選單 + 子指令）
 ```
 
 > 調整「整理需求」→ 改 `organizer.py` / `cli.build_rules()`
@@ -34,10 +37,16 @@ mailkeeper/
 pip install -e .
 ```
 
-或安裝建置好的 wheel：
+最簡單 —— 從 GitHub Release 一鍵安裝（複製即用，需 Python ≥ 3.10）：
 
 ```bash
-pip install dist/mailkeeper-0.3.0-py3-none-any.whl
+pip install --user https://github.com/hefenglim/mail-keeper/releases/download/v0.4.0/mailkeeper-0.4.0-py3-none-any.whl
+```
+
+最新版本見 [Releases 頁面](https://github.com/hefenglim/mail-keeper/releases)。或安裝本機建置好的 wheel：
+
+```bash
+pip install dist/mailkeeper-0.4.0-py3-none-any.whl
 ```
 
 ## 一次性設定：註冊 Azure 應用程式
@@ -68,7 +77,7 @@ python -m mailkeeper
 
 接著會印出「請開啟網址並輸入代碼」的訊息，登入後 token 會快取，之後不必再登入。
 若實際登入的帳號與 `config.json` 的 `email` 不一致，MailKeeper 會主動詢問你要如何處理（用登入帳號／保留設定／中止）。
-預設 `dry_run=True` 只顯示會做什麼、不會真的變動信箱；確認規則無誤後，把 `cli.py` 裡的 `organizer.run(dry_run=False)` 打開。
+互動執行 `mailkeeper` 會進入**選單**（見下節「選單與 CSV 功能」）。其中「依 CSV 搬移分類」為破壞性動作，預設只產生檢查報告（dry-run），加 `--run` 或於互動中確認後才真的搬移。
 
 ## 選單與 CSV 功能（v0.4.0）
 

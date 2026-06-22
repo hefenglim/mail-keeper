@@ -69,6 +69,9 @@ jobs:
         with:
           name: dist
           path: dist
+      - name: Resolve version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - name: Create GitHub Release and attach dist
         uses: softprops/action-gh-release@v2
         with:
@@ -77,17 +80,17 @@ jobs:
           body: |
             ## 安裝 / 更新 MailKeeper ${{ github.ref_name }}
 
-            從下方 **Assets** 下載 `mailkeeper-*-py3-none-any.whl`，再用 pip 安裝（需 Python ≥ 3.10）：
+            一行安裝（複製即用，需 Python ≥ 3.10）：
 
             ```bash
-            pip install --user mailkeeper-*-py3-none-any.whl
+            pip install --user https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mailkeeper-${{ steps.ver.outputs.version }}-py3-none-any.whl
             ```
 
-            或直接從本 Release 安裝（把版本換成本頁的標籤，例如 0.4.0）：
+            或從下方 **Assets** 下載 `mailkeeper-${{ steps.ver.outputs.version }}-py3-none-any.whl` 後：
 
             ```bash
-            pip install --user https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mailkeeper-<版本>-py3-none-any.whl
+            pip install --user mailkeeper-${{ steps.ver.outputs.version }}-py3-none-any.whl
             ```
 
-            首次執行 `mailkeeper` 會在「目前工作目錄」產生 `config.json` 範本；填入 `client_id` 與 `email` 後再執行一次即可。
+            首次執行 `mailkeeper` 會在「目前工作目錄」產生 `config.json` 範本；填入 `client_id` 與 `email` 後再執行一次。
             選單 / 三個 CSV 子指令（`export-worksheet` / `export-folders` / `classify`）用法見 README。
