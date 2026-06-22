@@ -1,0 +1,76 @@
+name: release
+
+# 推送版本 tag（例如 v0.4.0）即觸發：建置 → 驗證 artifact → 跨平台/多 Python 乾淨環境安裝 smoke → 發 GitHub Release。
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # 建立 Release 並上傳 dist 資產
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build + twine check
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check dist/*
+      - name: Ensure no secrets are packaged
+        run: |
+          if python -m zipfile -l dist/*.whl | grep -E 'token_cache|config\.json|Client ID|\.env|\.pem|\.key'; then
+            echo "::error::secret-like file packaged inside the wheel"; exit 1
+          fi
+          echo "no secret-like files in wheel"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  verify:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Install the built wheel WITH dependencies (clean runner)
+        shell: bash
+        run: pip install dist/*.whl   # 不加 --no-deps：驗證相依宣告完整
+      - name: Smoke test (no network)
+        shell: bash
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python -c "import mailkeeper, mailkeeper.cli, mailkeeper.csv_io, mailkeeper.classifier, mailkeeper.menu, mailkeeper.imap_client, mailkeeper.config_store; print('imports OK', mailkeeper.__version__)"
+          python -m mailkeeper --help
+          mailkeeper --help
+
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Create GitHub Release and attach dist
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
