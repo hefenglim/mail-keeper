@@ -15,7 +15,7 @@ import imaplib
 import re
 from dataclasses import dataclass
 from email.header import decode_header
-from typing import Any
+from typing import Any, Callable, Iterator
 
 import charset_normalizer
 
@@ -23,6 +23,24 @@ from . import config
 
 # 後端中立的錯誤別名：讓上層 (cli) 不必直接 import imaplib，維持 seam 純度。
 BackendError = imaplib.IMAP4.error
+
+_FETCH_BATCH = 50  # 每批 UID FETCH 的封數：減少往返、並讓進度於下載期間分批前進
+_UID_RE = re.compile(rb"UID (\d+)")
+
+
+def _chunked(seq: list[Any], size: int) -> Iterator[list[Any]]:
+    """等分切批：yield 連續的子序列（純函式，離線可測）。"""
+    for i in range(0, len(seq), size):
+        yield seq[i : i + size]
+
+
+def _extract_uid(meta: Any) -> str:
+    """從 IMAP FETCH 回應的中介列（如 b'1 (UID 10 BODY[...] {123}'）取出 UID。"""
+    if isinstance(meta, (bytes, bytearray)):
+        m = _UID_RE.search(meta)
+        if m:
+            return m.group(1).decode()
+    return ""
 
 
 @dataclass(frozen=True)
@@ -171,30 +189,46 @@ class OutlookIMAPClient:
                     folders.append(name)
         return folders
 
-    def list_headers(self, folder: str = "INBOX") -> list[MailHeader]:
-        """讀取指定資料夾所有郵件的標題 (只抓 header，不下載整封信，效率較佳)。"""
+    def list_headers(
+        self, folder: str = "INBOX", *, on_progress: Callable[[int, int], None] | None = None
+    ) -> list[MailHeader]:
+        """讀取指定資料夾所有郵件的標題 (只抓 header)。以分批 UID FETCH 取得，每批回報
+        進度 `on_progress(done, total)`，使大量郵件下載期間可見進展、不像當機。"""
         self._conn.select(folder, readonly=True)
         typ, data = self._conn.uid("search", None, "ALL")  # type: ignore[arg-type]  # IMAP SEARCH 允許 charset=None
         if typ != "OK" or not data or data[0] is None:
             return []
 
+        uids = data[0].split()
+        total = len(uids)
         headers: list[MailHeader] = []
-        for uid in data[0].split():
+        done = 0
+        for batch in _chunked(uids, _FETCH_BATCH):
             typ, msg_data = self._conn.uid(
-                "fetch", uid, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM TO DATE)])"
+                "fetch",
+                ",".join(u.decode() for u in batch),
+                "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM TO DATE)])",
             )
-            if typ != "OK" or not msg_data or msg_data[0] is None:
-                continue
-            msg = email.message_from_bytes(msg_data[0][1])
-            headers.append(
-                MailHeader(
-                    uid=uid.decode(),
-                    subject=_decode(msg.get("Subject")),
-                    sender=_decode(msg.get("From")),
-                    date=_decode(msg.get("Date")),
-                    recipients=_decode(msg.get("To")),
-                )
-            )
+            if typ != "OK":
+                # 批次失敗不可靜默吞（會回傳不完整標頭、誤導後續分類）：大聲報錯。
+                raise BackendError(f"讀取標頭失敗（{typ}）：{folder} 的批次 FETCH 未成功，請重試。")
+            if msg_data:
+                for part in msg_data:
+                    if not isinstance(part, tuple) or len(part) < 2 or part[1] is None:
+                        continue
+                    msg = email.message_from_bytes(part[1])
+                    headers.append(
+                        MailHeader(
+                            uid=_extract_uid(part[0]),
+                            subject=_decode(msg.get("Subject")),
+                            sender=_decode(msg.get("From")),
+                            date=_decode(msg.get("Date")),
+                            recipients=_decode(msg.get("To")),
+                        )
+                    )
+            done = min(done + len(batch), total)
+            if on_progress is not None:
+                on_progress(done, total)
         return headers
 
     def list_inbox_headers(self, mailbox: str = "INBOX") -> list[MailHeader]:

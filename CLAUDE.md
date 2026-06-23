@@ -108,5 +108,5 @@ Full steps in `MailKeeper-Handoff.html` and `README.md`.
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/003-csv-classify/plan.md
+at specs/004-output-ux-progress/plan.md
 <!-- SPECKIT END -->

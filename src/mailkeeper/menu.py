@@ -30,6 +30,9 @@ def run(
         if choice in ("0", "", "q", "quit"):
             return
         if choice.isdigit() and 1 <= int(choice) <= len(options):
-            options[int(choice) - 1][1]()
+            try:
+                options[int(choice) - 1][1]()
+            except Exception as exc:  # 單一動作失敗 → 印訊息後回選單，絕不讓整個 app 退出
+                emit(f"操作失敗：{exc}")
         else:
             emit("無效選項，請重試。")

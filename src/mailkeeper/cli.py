@@ -6,7 +6,7 @@ import contextlib
 import sys
 from typing import Callable, Iterator
 
-from . import classifier, config_store, console, csv_io, menu
+from . import classifier, config_store, console, csv_io, menu, progress
 from .auth import get_access_token
 from .imap_client import BackendError, OutlookIMAPClient
 from .organizer import MailBackend, MailOrganizer, Rule, from_contains, subject_contains
@@ -129,24 +129,29 @@ def _run() -> None:
 # ---------- 三個 CSV 功能（皆接受注入式 backend，便於離線測試） ----------
 
 def export_worksheet(backend: MailBackend, folder: str, out: str) -> None:
-    headers = backend.list_headers(folder)
+    out = csv_io.ensure_csv_suffix(out)
+    with progress.reporter(f"讀取「{folder}」標頭") as on_progress:
+        headers = backend.list_headers(folder, on_progress=on_progress)
     csv_io.write_worksheet(headers, folder, out)
     console.safe_print(f"已將資料夾「{folder}」的 {len(headers)} 封郵件匯出到 {out}")
 
 
 def export_folders(backend: MailBackend, out: str) -> None:
+    out = csv_io.ensure_csv_suffix(out)
     folders = backend.list_folders()
     csv_io.write_folders(folders, out)
     console.safe_print(f"已匯出 {len(folders)} 個資料夾到 {out}")
 
 
-def _print_report(items: list[classifier.ReportItem]) -> None:
+def _print_report(items: list[classifier.ReportItem], to_create: list[str]) -> None:
     moves = [it for it in items if it.status == classifier.CANDIDATE]
     skips = [it for it in items if it.status == classifier.SKIP]
     infes = [it for it in items if it.status == classifier.INFEASIBLE]
     console.safe_print(
         f"檢查報告：將搬移 {len(moves)}、無變動 {len(skips)}、不可行 {len(infes)}"
     )
+    if to_create:
+        console.safe_print(f"⚠ 將新建 {len(to_create)} 個資料夾：{', '.join(to_create)}")
     for it in moves:
         console.safe_print(
             f"  將搬移：{it.row.uid}@{it.row.current_folder} → {it.row.target_folder}"
@@ -170,9 +175,10 @@ def classify(
     interactive: bool,
     ask: Callable[[], bool] | None = None,
 ) -> None:
+    in_path = csv_io.ensure_csv_suffix(in_path)
     rows = csv_io.read_worksheet(in_path)
     items = classifier.build_report(backend, rows)
-    _print_report(items)
+    _print_report(items, classifier.new_folders(backend, items))
     if not classifier.candidates(items):
         console.safe_print("沒有需要搬移的列（無變動或皆不可行）。")
         return
@@ -184,9 +190,17 @@ def classify(
         console.safe_print("（預覽）未搬移。確認無誤後加 --run，或於互動中輸入 y 執行。")
         return
 
-    results = classifier.execute(backend, items)
+    with progress.reporter("搬移分類") as on_progress:
+        results = classifier.execute(backend, items, on_progress=on_progress)
     ok = sum(1 for r in results if r.ok)
     console.safe_print(f"完成：成功搬移 {ok} / {len(results)}。")
+    remaining = len(classifier.candidates(items)) - len(results)
+    if remaining > 0:
+        console.safe_print(
+            f"⚠ 偵測到連續失敗、疑似連線中斷，已提前停止；剩餘 {remaining} 筆未處理，"
+            "請稍後重試（必要時重新登入）。",
+            file=sys.stderr,
+        )
     for r in results:
         if not r.ok:
             console.safe_print(

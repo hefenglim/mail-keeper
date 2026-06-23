@@ -98,6 +98,8 @@ mailkeeper classify --in worksheet.csv --run    # 確認無誤後實際搬移
 
 工作流：人或 AI 在工具外編輯 `worksheet.csv` 的 `target_folder`（參考 `folders.csv`），功能3 對「有變動」的列產生可行性檢查報告，確認後才依 CSV 搬移分類。搬移為破壞性動作、預設 dry-run。
 
+> **v0.5.0**：CSV 改用 UTF-8 + BOM，Excel 可直接開啟、中文不亂碼；檔名免打副檔名（自動補 `.csv`）；大資料夾（> 30 封）讀取/搬移時顯示即時進度，不再像當機。
+
 ## 當套件匯入使用
 
 ```python

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import csv
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -16,6 +17,10 @@ from .imap_client import MailHeader
 WORKSHEET_FIELDS = ["uid", "current_folder", "target_folder", "date", "from", "to", "subject"]
 FOLDERS_FIELDS = ["folder"]
 REQUIRED_FIELDS = ("uid", "current_folder", "target_folder")
+
+# UTF-8 + BOM：讓 Microsoft Excel 直接正確判讀中文等多國語文；讀取端會剝除 BOM
+# 並容忍無 BOM 的舊檔（utf-8-sig 解碼相容純 utf-8）。
+CSV_ENCODING = "utf-8-sig"
 
 
 class CsvError(RuntimeError):
@@ -31,10 +36,22 @@ class ClassificationRow:
     target_folder: str
 
 
+def ensure_csv_suffix(name: str) -> str:
+    """檔名沒有副檔名時補上 `.csv`；已有副檔名（含非 `.csv`）則原樣返回。
+
+    `os.path.splitext` 具路徑感知（目錄部分的點不算副檔名）。結尾單一點（如 `report.`）
+    視為無副檔名，去點後補 `.csv`。
+    """
+    _root, ext = os.path.splitext(name)
+    if ext and ext != ".":
+        return name
+    return name.rstrip(".") + ".csv"
+
+
 def write_worksheet(headers: Iterable[MailHeader], folder: str, path) -> None:
     """把某資料夾的郵件標題寫成分類工作表（`target_folder` 留空）。已存在則覆寫。"""
     try:
-        with Path(path).open("w", encoding="utf-8", newline="") as f:
+        with Path(path).open("w", encoding=CSV_ENCODING, newline="") as f:
             w = csv.writer(f)
             w.writerow(WORKSHEET_FIELDS)
             for h in headers:
@@ -46,7 +63,7 @@ def write_worksheet(headers: Iterable[MailHeader], folder: str, path) -> None:
 def write_folders(folders: Iterable[str], path) -> None:
     """把資料夾清單寫成 CSV（本期只輸出 `folder` 欄）。已存在則覆寫。"""
     try:
-        with Path(path).open("w", encoding="utf-8", newline="") as f:
+        with Path(path).open("w", encoding=CSV_ENCODING, newline="") as f:
             w = csv.writer(f)
             w.writerow(FOLDERS_FIELDS)
             for name in folders:
@@ -58,7 +75,7 @@ def write_folders(folders: Iterable[str], path) -> None:
 def read_worksheet(path) -> list[ClassificationRow]:
     """讀入編輯後的工作表；依表頭定位欄位、容忍多餘欄；缺必要欄/壞檔→CsvError。"""
     try:
-        text = Path(path).read_text(encoding="utf-8")
+        text = Path(path).read_text(encoding=CSV_ENCODING)
     except OSError as exc:
         raise CsvError(f"無法讀取 CSV {path}：{exc}") from exc
 
