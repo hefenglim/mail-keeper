@@ -20,6 +20,7 @@ jobs:
       - name: Build + twine check
         run: |
           python -m pip install --upgrade build twine
+          python scripts/stamp-build.py   # 烙印 build 時間戳 (YYYYMMDD-HHMMSS)
           python -m build
           python -m twine check dist/*
       - name: Ensure no secrets are packaged
@@ -57,7 +58,7 @@ jobs:
         env:
           PYTHONUTF8: "1"
         run: |
-          python -c "import mailkeeper, mailkeeper.cli, mailkeeper.csv_io, mailkeeper.classifier, mailkeeper.menu, mailkeeper.imap_client, mailkeeper.config_store; print('imports OK', mailkeeper.__version__)"
+          python -c "import mailkeeper, mailkeeper.cli, mailkeeper.csv_io, mailkeeper.classifier, mailkeeper.menu, mailkeeper.imap_client, mailkeeper.config_store, mailkeeper.buildinfo; print('imports OK', mailkeeper.__version__, 'build', mailkeeper.buildinfo.build_stamp())"
           python -m mailkeeper --help
           mailkeeper --help
 

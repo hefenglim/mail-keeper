@@ -17,6 +17,15 @@ ProgressCallback = Callable[[int, int], None]
 
 _THRESHOLD = 30
 _MIN_INTERVAL = 0.1  # 重繪節流（秒），避免洗版
+_BAR_WIDTH = 20  # ASCII 狀態條寬度（字元）
+_BAR_FILLED = "█"
+_BAR_EMPTY = "░"
+
+
+def _render_bar(pct: int) -> str:
+    """以方塊字元組出比例填充的狀態條（已完成 █、未完成 ░）。"""
+    filled = max(0, min(_BAR_WIDTH, pct * _BAR_WIDTH // 100))
+    return _BAR_FILLED * filled + _BAR_EMPTY * (_BAR_WIDTH - filled)
 
 
 class _Progress:
@@ -41,7 +50,8 @@ class _Progress:
                 return  # 節流（最後一筆不節流，確保收尾到 100%）
             self._last = now
             pct = int(done * 100 / total) if total else 100
-            self._stream.write(f"\r{self._label} {done}/{total} ({pct}%)")
+            bar = _render_bar(pct)
+            self._stream.write(f"\r{self._label} [{bar}] {done}/{total} ({pct}%)")
             self._stream.flush()
             self._wrote = True
         except Exception:

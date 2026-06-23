@@ -1,6 +1,8 @@
 """Menu routing + non-interactive safety. Test-first."""
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from mailkeeper import cli, menu
@@ -43,3 +45,23 @@ def test_main_no_subcommand_non_tty_prints_usage_and_exits():
     with pytest.raises(SystemExit) as ei:
         cli.main([])
     assert ei.value.code != 0
+
+
+def test_menu_header_is_shown():
+    msgs: list[str] = []
+    menu.run(
+        [("a", lambda: None)],
+        header="HEADER-XYZ",
+        read=lambda prompt="": "0",
+        out=lambda *a, **k: msgs.append(" ".join(str(x) for x in a)),
+    )
+    assert any("HEADER-XYZ" in m for m in msgs)
+
+
+def test_cli_menu_header_shows_name_version_build():
+    # 主選單開頭：應用名稱 + 版本號 + build 日期時間（YYYYMMDD-HHMMSS）
+    from mailkeeper import __version__
+
+    h = cli._menu_header()
+    assert "MailKeeper" in h and f"v{__version__}" in h
+    assert re.search(r"build (\d{8}-\d{6}|unknown)", h)

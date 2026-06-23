@@ -79,3 +79,25 @@ def test_total_none_is_noop():
         cb(5, None)
         cb(10, None)
     assert s.getvalue() == ""  # 未知總數 → no-op、不崩潰
+
+
+def test_renders_visual_ascii_bar():
+    # 強化：除了 done/total 文字，需有 ASCII 字碼狀態條（外框 + 已完成/未完成填充）。
+    s = _Stream(tty=True)
+    with progress.reporter("讀取", stream=s) as cb:
+        cb(25, 50)  # 50%
+        cb(50, 50)  # 100%
+    out = s.getvalue()
+    assert "[" in out and "]" in out  # 狀態條外框
+    assert "█" in out  # 已完成填充
+    assert "░" in out  # 未完成填充（50% 時仍有未填滿）
+    assert "50/50" in out and "100%" in out
+
+
+def test_bar_fills_proportionally():
+    s = _Stream(tty=True)
+    with progress.reporter("讀取", stream=s) as cb:
+        cb(50, 50)  # 100% → 整條填滿，無未完成字元
+    last_frame = s.getvalue().split("\r")[-1]
+    assert "░" not in last_frame  # 100% 不應再有未完成填充
+    assert "█" in last_frame

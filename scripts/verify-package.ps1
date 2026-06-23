@@ -42,6 +42,7 @@ function CheckExit($m) { if ($LASTEXITCODE -ne 0) { Fail $m } }
 # --- Step 2: build ---
 Step "2/6 Build wheel + sdist"
 & $PythonExe -m pip install --quiet --upgrade build twine; CheckExit "could not install build/twine"
+& $PythonExe scripts/stamp-build.py; CheckExit "build stamp failed"  # 烙印 build 時間戳
 & $PythonExe -m build; CheckExit "python -m build failed"
 
 $wheel = Get-ChildItem "$dist\*.whl" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -82,6 +83,8 @@ Step "5/6 Smoke test (no network)"
 $env:PYTHONUTF8 = "1"
 $ver = & $vpy -c "import mailkeeper; print(mailkeeper.__version__)"; CheckExit "version import failed"
 Write-Host "installed version: $ver"
+$bld = & $vpy -c "import mailkeeper.buildinfo as b; print(b.build_stamp())"; CheckExit "build stamp import failed"
+Write-Host "build stamp: $bld"
 & $vpy -c "import mailkeeper.cli, mailkeeper.csv_io, mailkeeper.classifier, mailkeeper.menu, mailkeeper.imap_client, mailkeeper.config_store; print('imports OK')"
 CheckExit "module import smoke failed"
 & $vpy -m mailkeeper --help | Out-Null; CheckExit "'python -m mailkeeper --help' failed"

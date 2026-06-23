@@ -14,12 +14,13 @@ Option = tuple[str, Callable[[], None]]
 def run(
     options: list[Option],
     *,
+    header: str = "=== MailKeeper 選單 ===",
     read: Callable[[str], str] = input,
     out: Callable[..., None] | None = None,
 ) -> None:
     emit = out if out is not None else console.safe_print
     while True:
-        emit("\n=== MailKeeper 選單 ===")
+        emit(f"\n{header}")
         for i, (label, _) in enumerate(options, 1):
             emit(f"  {i}. {label}")
         emit("  0. 離開")

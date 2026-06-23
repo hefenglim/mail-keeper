@@ -145,7 +145,7 @@ def test_classify_warns_when_execution_stops_early(folder_backend, tmp_path, cap
     monkeypatch.setattr(
         classifier,
         "execute",
-        lambda backend, items, *, on_progress=None: [
+        lambda backend, items, *, on_progress=None, progress=None: [
             classifier.MoveResult(classifier.candidates(items)[0].row, False, "EOF")
         ],
     )
