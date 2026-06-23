@@ -6,7 +6,7 @@ import contextlib
 import sys
 from typing import Callable, Iterator
 
-from . import classifier, config_store, console, csv_io, menu, progress
+from . import __version__, buildinfo, classifier, config_store, console, csv_io, menu, progress
 from .auth import get_access_token
 from .imap_client import BackendError, OutlookIMAPClient
 from .organizer import MailBackend, MailOrganizer, Rule, from_contains, subject_contains
@@ -177,7 +177,7 @@ def classify(
 ) -> None:
     in_path = csv_io.ensure_csv_suffix(in_path)
     rows = csv_io.read_worksheet(in_path)
-    items = classifier.build_report(backend, rows)
+    items = classifier.build_report(backend, rows, progress=progress.reporter)
     _print_report(items, classifier.new_folders(backend, items))
     if not classifier.candidates(items):
         console.safe_print("沒有需要搬移的列（無變動或皆不可行）。")
@@ -191,7 +191,9 @@ def classify(
         return
 
     with progress.reporter("搬移分類") as on_progress:
-        results = classifier.execute(backend, items, on_progress=on_progress)
+        results = classifier.execute(
+            backend, items, on_progress=on_progress, progress=progress.reporter
+        )
     ok = sum(1 for r in results if r.ok)
     console.safe_print(f"完成：成功搬移 {ok} / {len(results)}。")
     remaining = len(classifier.candidates(items)) - len(results)
@@ -232,6 +234,11 @@ def _menu_export_folders(backend: MailBackend) -> None:
 def _menu_classify(backend: MailBackend) -> None:
     in_path = input("工作表 CSV 路徑 [worksheet.csv]：").strip() or "worksheet.csv"
     classify(backend, in_path, run=False, interactive=True)
+
+
+def _menu_header() -> str:
+    """主選單開頭：應用名稱 + 版本號 + build 日期時間（YYYYMMDD-HHMMSS）。"""
+    return f"=== MailKeeper v{__version__}｜build {buildinfo.build_stamp()} ==="
 
 
 def _menu_options(backend: MailBackend) -> list[tuple[str, Callable[[], None]]]:
@@ -277,7 +284,7 @@ def main(argv: list[str] | None = None) -> None:
         else:  # 無子指令
             if sys.stdin.isatty() and sys.stdout.isatty():
                 with _connect() as backend:
-                    menu.run(_menu_options(backend))
+                    menu.run(_menu_options(backend), header=_menu_header())
             else:
                 parser.print_help(sys.stderr)
                 raise SystemExit(2)

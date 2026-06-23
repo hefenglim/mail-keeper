@@ -5,15 +5,29 @@
 """
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, ContextManager
 
 from .csv_io import ClassificationRow
 from .organizer import MailBackend
+from .progress import ProgressCallback  # 後端中立、無 imaplib，可安全跨層共用
 
 SKIP = "skip"
 CANDIDATE = "candidate"
 INFEASIBLE = "infeasible"
+
+# 進度回報工廠：給定標籤回傳一個上下文管理器，進入後得到 (done,total) 回呼。
+# 由 cli 注入 ``progress.reporter``；預設為 no-op（離線測試／非互動不顯示）。
+ReporterFactory = Callable[[str], "ContextManager[ProgressCallback]"]
+
+
+def _noop_progress(done: int, total: int) -> None:
+    return None
+
+
+def _noop_reporter(label: str) -> "ContextManager[ProgressCallback]":
+    return contextlib.nullcontext(_noop_progress)
 
 
 @dataclass(frozen=True)
@@ -30,8 +44,17 @@ class MoveResult:
     error: str = ""
 
 
-def build_report(backend: MailBackend, rows: list[ClassificationRow]) -> list[ReportItem]:
-    """逐列分類為 skip / candidate / infeasible，不變更任何郵件（dry-run）。"""
+def build_report(
+    backend: MailBackend,
+    rows: list[ClassificationRow],
+    *,
+    progress: ReporterFactory | None = None,
+) -> list[ReportItem]:
+    """逐列分類為 skip / candidate / infeasible，不變更任何郵件（dry-run）。
+
+    讀取各來源夾標頭時，透過 ``progress`` 工廠顯示進度（大量郵件不像當機）。
+    """
+    make = progress or _noop_reporter
     folders = set(backend.list_folders())
     uid_cache: dict[str, set[str]] = {}
 
@@ -40,7 +63,8 @@ def build_report(backend: MailBackend, rows: list[ClassificationRow]) -> list[Re
             # 不吞例外：來源夾「存在卻讀取失敗」（連線中斷/逾時）應如實往外傳，
             # 而非把所有列誤標為「不可行」而遮蔽真正的連線錯誤。資料夾不存在的
             # 情況已在呼叫前以 row.current_folder not in folders 處理。
-            uid_cache[folder] = {h.uid for h in backend.list_headers(folder)}
+            with make(f"讀取「{folder}」標頭") as cb:
+                uid_cache[folder] = {h.uid for h in backend.list_headers(folder, on_progress=cb)}
         return uid_cache[folder]
 
     items: list[ReportItem] = []
@@ -85,11 +109,14 @@ def execute(
     items: list[ReportItem],
     *,
     on_progress: Callable[[int, int], None] | None = None,
+    progress: ReporterFactory | None = None,
 ) -> list[MoveResult]:
     """對可行候選逐列搬移：目標不存在則自動建立；來源 UID 執行時已不存在則回報失敗。
 
-    每處理完一個候選（成功或失敗）即回報進度 ``on_progress(done, total)``。
+    每處理完一個候選（成功或失敗）即回報進度 ``on_progress(done, total)``；
+    首次讀取各來源夾現存 UID 時，另透過 ``progress`` 工廠顯示讀取進度。
     """
+    make = progress or _noop_reporter
     existing = set(backend.list_folders())
     cands = candidates(items)
     total = len(cands)
@@ -101,7 +128,8 @@ def execute(
 
     def present_in(folder: str) -> set[str]:
         if folder not in present_cache:
-            present_cache[folder] = {h.uid for h in backend.list_headers(folder)}
+            with make(f"讀取「{folder}」標頭") as cb:
+                present_cache[folder] = {h.uid for h in backend.list_headers(folder, on_progress=cb)}
         return present_cache[folder]
 
     consecutive_failures = 0

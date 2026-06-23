@@ -20,3 +20,13 @@ dist/
 .venv/
 .pytest_cache/
 *.tmp
+
+# 測試 / 覆蓋率 / 突變測試產物
+.coverage
+.coverage.*
+htmlcov/
+.mutmut-cache
+.mypy_cache/
+
+# 建置時烙印的 build 時間戳（由 scripts/stamp-build.py 產生，不提交）
+src/mailkeeper/_buildinfo.py

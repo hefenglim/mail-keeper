@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.5.1] - 2026-06-24
+### Fixed
+- **致命：匯出工作表 UID 全空（0.5.0 回歸）**。0.5.0 將 `list_headers` 改為分批 UID FETCH 後，FETCH 的 data-items 未顯式索取 `UID`，Outlook 回應 metadata 不含 `UID <n>`，導致每列 `uid` 解析為空字串——匯出的工作表完全無法用於功能3 分類（搬移依 `(current_folder, uid)`）。修法：FETCH 改為 `(UID BODY.PEEK[HEADER.FIELDS (...)])`（UID 置於 BODY 之前）。並加防線：若仍解析不到 UID 即大聲報錯中止，絕不靜默產出缺 UID 的無效工作表。
+  > 0.4.0 逐封 FETCH 時 UID 直接沿用 SEARCH 結果故無此問題；批次化才暴露。先前測試 fixture 在假回應中自行塞入 `UID`，與真實後端行為不符而遮蔽了此 bug（已修正測試以模型化真實情境，並新增「FETCH 必含 UID」回歸守衛）。見 `doc/lessons-learned.md`。
+- **資料遺失防護：`imap_client.move` 後備路徑**。伺服器不支援 `UID MOVE` 時的後備 copy→標刪→expunge 有兩個資料遺失風險：(1) **未檢查 COPY 結果就標刪+expunge**（COPY 失敗則郵件沒複本就被刪）；(2) 用**整夾 `EXPUNGE`** 會波及信箱內其他已標 `\Deleted` 的郵件。修法：COPY 成功才標刪；刪除改用 **`UID EXPUNGE`（RFC 4315 UIDPLUS）只清該封**，僅在伺服器無 UIDPLUS 時才退回整夾 EXPUNGE。此路徑先前**零測試**。
+### Changed
+- **功能3 初步檢驗顯示進度**：`classifier.build_report` 讀取各來源夾標頭時接上進度回呼（先前無提示，大資料夾像當機）。`execute` 首次讀來源夾現存 UID 時亦同。兩者新增可選 `progress` 工廠參數（向後相容）。
+- **進度條視覺化**：`progress` 模組除 `done/total (%)` 文字外，加上 ASCII 方塊狀態條（`[██████░░░░] 213/426 (50%)`），完成比例一目了然。
+- **主選單開頭顯示版本與 build 時間**：`=== MailKeeper v0.5.1｜build YYYYMMDD-HHMMSS ===`。build 時間於建置時由 `scripts/stamp-build.py` 烙印進 wheel（`buildinfo.build_stamp()`；dev/editable 安裝則回退為套件檔案 mtime）。`menu.run` 新增 `header` 參數。
+### Added — 測試可信度基礎建設（回應「為何測試沒抓到」之檢討）
+- **忠實 IMAP 模擬器 `tests/imap_sim.py::FakeIMAPConn`**：1:1 對齊 `imaplib` 介面與回應資料結構、真狀態機底層、完整 IMAP 指令動作日誌；**只回傳有索取的 data items**、EXPUNGE 忠實波及全部 `\Deleted`、COPY/MOVE 目標不存在回 `NO`。配 `tests/test_imap_sim.py`（鎖定模擬器自身保真度）。
+- **契約測試 `tests/test_imap_contract.py`**：對模擬器執行 `OutlookIMAPClient`，查核送出的 IMAP 指令正確安全 + 回應解析正確 + 破壞性動作不遺失資料 + XOAUTH2 認證字串格式。本批測試本可在 0.5.0 即攔下 UID bug。
+- **CI 工作流 `.github/workflows/ci.yml`**：每次 push/PR 離線跑測試 + mypy + 覆蓋率閘門（套件 ≥85%、`imap_client` ≥88%）。先前僅有 release 流程、無持續測試把關。
+- 開發紀律固化：`CLAUDE.md §7/§4`（seam 契約測試規則）、`doc/release-smoke.md`（發版前真實帳號 smoke 檢查表）、`scripts/coverage.ps1`、`scripts/mutation.ps1`（突變測試）。
+- **所有 Outlook IMAP 連線測試統一走 `FakeIMAPConn`**：移除各處零散假連線（`_FakeConn`/`FakeIMAP`/內嵌 `FakeSSL`/假 client），`connect()`/逾時/認證/cli 設定流程一律以 `imap_sim.install()` 把 `imaplib.IMAP4_SSL` 換成模擬器、跑**真實** `OutlookIMAPClient`。
+- **模擬器升級為離線測試地基（保真度 + 母版資料集 + 雙層驗證）**：
+  - **位元組級保真**：`tests/imaplib_probe.py` 把 RFC 3501 wire bytes 餵進真 imaplib 解析器取得權威結構，`tests/test_imap_fidelity.py` 斷言 `FakeIMAPConn` 與其逐位元組相同（FETCH/SEARCH/LIST）。藉此**修正一個保真缺口**：LIST 的 CJK 夾名改為 modified-UTF-7（`_encode_mutf7`，與產品 `_decode_mutf7` round-trip）。
+  - **母版資料集** `tests/imap_dataset.py`：涵蓋 ASCII/CJK/emoji/encoded-word/已讀/使用者已標刪/空·超長主旨/巢狀·CJK 夾名；`fresh_sim()` 每測試深拷貝獨立一份。
+  - **雙層驗證**：`sim.snapshot()` 提供前後資料狀態比對；測試同時查核指令動作日誌（`sim.log`）與資料變動是否合理（範式見 `tests/test_imap_dataset.py`）。
+  - 新增 IMAP 方法時：先用真 imaplib 對拍加 fidelity case、於模擬器底層補上真實行為（已寫入 `CLAUDE.md §7`）。測試數 76→166。
+
 ## [0.5.0] - 2026-06-23
 ### Added
 - 進度模組 `progress.py`：大迴圈（標頭讀取、分類搬移）於待處理項目數 > 30 且互動 TTY 時即時顯示進度（`\r` 就地更新），避免大資料夾誤判當機；非互動降級、不污染資料輸出、錯誤乾淨收尾、永不崩潰。

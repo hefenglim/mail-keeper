@@ -1,0 +1,37 @@
+name: CI
+
+# 每次 push / PR 都離線跑：測試（含 IMAP 模擬器契約測試）、型別檢查、覆蓋率閘門。
+# 這是「seam 以下」的把關：tests/imap_sim.py 忠實模擬 IMAP，契約測試查核我們送出的
+# IMAP 指令是否正確、安全（見 doc/lessons-learned.md 的 UID / move 事件）。
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install (editable + test extras)
+        run: python -m pip install -e ".[test]"
+
+      - name: Type check (mypy)
+        run: python -m mypy src/mailkeeper
+
+      - name: Tests + coverage (offline)
+        run: python -m pytest --cov=mailkeeper --cov-report=term-missing --cov-fail-under=85
+
+      # 對「唯一接真實協定、最高風險」的後端模組單獨設較高門檻，守住盲區。
+      - name: Coverage gate — imap_client (the protocol seam)
+        run: python -m coverage report --include="*/imap_client.py" --fail-under=88

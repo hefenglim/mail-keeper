@@ -100,6 +100,30 @@ def test_new_folders_lists_to_be_created(folder_backend):
     assert classifier.new_folders(folder_backend, items) == ["NewA", "NewB"]
 
 
+def test_build_report_wires_progress_to_source_reads(folder_backend, monkeypatch):
+    # 體驗修正：功能3 初步檢驗（讀來源夾標頭）也要能接上進度回呼，避免大量郵件時像當機。
+    import contextlib
+
+    seen: dict[str, object] = {}
+    real = folder_backend.list_headers
+
+    def spy(folder, *, on_progress=None):
+        seen[folder] = on_progress
+        return real(folder, on_progress=on_progress)
+
+    monkeypatch.setattr(folder_backend, "list_headers", spy)
+
+    labels: list[str] = []
+
+    def factory(label):
+        labels.append(label)
+        return contextlib.nullcontext(lambda d, t: None)
+
+    classifier.build_report(folder_backend, _rows(("10", "INBOX", "Work")), progress=factory)
+    assert seen.get("INBOX") is not None  # 來源夾讀取已接上進度回呼
+    assert any("INBOX" in lbl for lbl in labels)  # 進度標籤帶資料夾名
+
+
 def test_execute_reports_progress(folder_backend):
     rows = _rows(("10", "INBOX", "Work"), ("20", "Work", "Archive"))
     items = classifier.build_report(folder_backend, rows)

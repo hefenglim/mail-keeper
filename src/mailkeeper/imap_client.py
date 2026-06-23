@@ -207,7 +207,10 @@ class OutlookIMAPClient:
             typ, msg_data = self._conn.uid(
                 "fetch",
                 ",".join(u.decode() for u in batch),
-                "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM TO DATE)])",
+                # 必須顯式索取 UID（置於 BODY 之前）：批次 FETCH 無法像逐封那樣沿用
+                # SEARCH 的 UID，只能從回應 metadata 解析；未索取時 Outlook 不回 UID，
+                # 會導致每列 uid 全空、產出無法用於分類的工作表（0.5.0 致命回歸）。
+                "(UID BODY.PEEK[HEADER.FIELDS (SUBJECT FROM TO DATE)])",
             )
             if typ != "OK":
                 # 批次失敗不可靜默吞（會回傳不完整標頭、誤導後續分類）：大聲報錯。
@@ -216,10 +219,18 @@ class OutlookIMAPClient:
                 for part in msg_data:
                     if not isinstance(part, tuple) or len(part) < 2 or part[1] is None:
                         continue
+                    uid = _extract_uid(part[0])
+                    if not uid:
+                        # 解析不到 UID 即協定異常：寧可大聲中止，也不靜默吐出 uid 空白、
+                        # 後續完全無法搬移的「無效工作表」（避免重演靜默資料汙染）。
+                        raise BackendError(
+                            f"讀取標頭失敗：無法從回應解析 UID（{folder}）。已中止以免"
+                            "產生缺 UID 的無效工作表；請重試，若持續發生請回報。"
+                        )
                     msg = email.message_from_bytes(part[1])
                     headers.append(
                         MailHeader(
-                            uid=_extract_uid(part[0]),
+                            uid=uid,
                             subject=_decode(msg.get("Subject")),
                             sender=_decode(msg.get("From")),
                             date=_decode(msg.get("Date")),
@@ -241,13 +252,29 @@ class OutlookIMAPClient:
         self._conn.create(folder)
 
     def move(self, uid: str, dest_folder: str, mailbox: str = "INBOX") -> None:
-        """將郵件搬到指定資料夾。Outlook 支援 UID MOVE 擴充。"""
+        """將郵件搬到指定資料夾。優先用 UID MOVE；伺服器不支援時退回 copy→標刪→UID EXPUNGE。
+
+        安全鐵則（破壞性動作，避免資料遺失）：
+          1. **COPY 成功才標刪**：copy 未成功就絕不 `\\Deleted`+expunge（沒有複本就刪 = 永久遺失）。
+          2. **以 UID EXPUNGE 限定該封**（RFC 4315 UIDPLUS），避免整夾 EXPUNGE 波及其他
+             已被標 `\\Deleted` 的郵件；僅在伺服器不支援 UIDPLUS 時才退回整夾 EXPUNGE。
+        """
         self._conn.select(mailbox)
         typ, _ = self._conn.uid("move", uid, dest_folder)
+        if typ == "OK":
+            return
+
+        # 後備方案（伺服器不支援 MOVE）：copy + 標刪 + UID EXPUNGE
+        typ, _ = self._conn.uid("copy", uid, dest_folder)
         if typ != "OK":
-            # 後備方案：不支援 MOVE 時改用 copy + delete + expunge
-            self._conn.uid("copy", uid, dest_folder)
-            self._conn.uid("store", uid, "+FLAGS", "(\\Deleted)")
+            raise BackendError(
+                f"搬移失敗：COPY 未成功（{typ}），已中止且未刪除來源郵件"
+                f"（uid={uid} → {dest_folder}）。請確認目標資料夾後重試。"
+            )
+        self._conn.uid("store", uid, "+FLAGS", "(\\Deleted)")
+        typ, _ = self._conn.uid("expunge", uid)  # UID EXPUNGE：只清這封
+        if typ != "OK":
+            # 伺服器無 UIDPLUS：別無選擇只能整夾 EXPUNGE（此後備路徑仍可能波及其他已標刪郵件）。
             self._conn.expunge()
 
     def mark_read(self, uid: str, mailbox: str = "INBOX") -> None:
