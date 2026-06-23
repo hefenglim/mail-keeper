@@ -1,0 +1,81 @@
+"""US3 — backend-neutral progress reporter. Test-first."""
+from __future__ import annotations
+
+import io
+
+import pytest
+
+from mailkeeper import progress
+
+
+class _Stream(io.StringIO):
+    def __init__(self, tty: bool = True) -> None:
+        super().__init__()
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+
+def _drive(cb, total: int, n: int | None = None) -> None:
+    n = total if n is None else n
+    for i in range(1, n + 1):
+        cb(i, total)
+
+
+def test_shows_when_tty_and_above_threshold():
+    s = _Stream(tty=True)
+    with progress.reporter("讀取", stream=s) as cb:
+        _drive(cb, 50)
+    out = s.getvalue()
+    assert out and "50/50" in out and out.endswith("\n")  # 顯示 + 乾淨收尾
+
+
+def test_silent_when_non_tty():
+    s = _Stream(tty=False)
+    with progress.reporter("讀取", stream=s) as cb:
+        _drive(cb, 100)
+    assert s.getvalue() == ""  # 非 TTY 零輸出 (FR-010)
+
+
+def test_silent_when_at_or_below_threshold():
+    s = _Stream(tty=True)
+    with progress.reporter("讀取", stream=s) as cb:
+        _drive(cb, 30)  # total=30，非 > 30
+    assert s.getvalue() == ""  # 門檻 (FR-015)
+
+
+def test_clean_finish_on_exception_and_propagates():
+    s = _Stream(tty=True)
+    with pytest.raises(ValueError):
+        with progress.reporter("讀取", stream=s) as cb:
+            cb(10, 50)
+            raise ValueError("boom")
+    assert s.getvalue().endswith("\n")  # 例外仍乾淨收尾 (FR-012)
+
+
+def test_swallows_stream_write_error_with_cjk_label():
+    class _Bad(_Stream):
+        def write(self, _s):  # type: ignore[override]
+            raise UnicodeEncodeError("utf-8", "x", 0, 1, "boom")
+
+    s = _Bad(tty=True)
+    # CJK/emoji 標籤 + 寫入丟編碼錯誤 → 被吞、不崩潰（編碼安全 FR-011）
+    with progress.reporter("讀取中文標籤🎉", stream=s) as cb:
+        _drive(cb, 50)  # 不應拋出例外
+
+
+def test_writes_only_to_injected_stream(capsys):
+    s = _Stream(tty=True)
+    with progress.reporter("讀取", stream=s) as cb:
+        _drive(cb, 50)
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""  # 不污染 stdout/stderr (FR-011)
+
+
+def test_total_none_is_noop():
+    s = _Stream(tty=True)
+    with progress.reporter("讀取", stream=s) as cb:
+        cb(5, None)
+        cb(10, None)
+    assert s.getvalue() == ""  # 未知總數 → no-op、不崩潰

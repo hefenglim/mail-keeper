@@ -57,8 +57,13 @@ class FakeBackend:
     def list_folders(self) -> list[str]:
         return list(self._folders.keys())
 
-    def list_headers(self, folder: str = "INBOX") -> list[MailHeader]:
-        return list(self._folders.get(folder, []))
+    def list_headers(self, folder: str = "INBOX", *, on_progress=None) -> list[MailHeader]:
+        items = list(self._folders.get(folder, []))
+        total = len(items)
+        for i, _h in enumerate(items, 1):
+            if on_progress is not None:
+                on_progress(i, total)
+        return items
 
     def list_inbox_headers(self, mailbox: str = "INBOX") -> list[MailHeader]:
         return self.list_headers(mailbox)

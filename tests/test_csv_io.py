@@ -13,7 +13,7 @@ HEADER = ["uid", "current_folder", "target_folder", "date", "from", "to", "subje
 
 
 def _rows(path) -> list[list[str]]:
-    with Path(path).open(encoding="utf-8", newline="") as f:
+    with Path(path).open(encoding="utf-8-sig", newline="") as f:
         return list(csv.reader(f))
 
 
@@ -43,6 +43,37 @@ def test_write_worksheet_multilingual(tmp_path):
     text = out.read_text(encoding="utf-8")
     for s in samples:
         assert s in text  # ≥5 語文 + emoji 保留 (SC-002)
+
+
+def test_write_worksheet_has_utf8_bom(tmp_path):
+    out = tmp_path / "w.csv"
+    csv_io.write_worksheet([MailHeader("1", "S", "a", "Mon", "b")], "INBOX", out)
+    assert out.read_bytes().startswith(b"\xef\xbb\xbf")  # Excel 需 BOM 才正確判讀 UTF-8 (FR-001)
+
+
+def test_read_worksheet_strips_bom(tmp_path):
+    # 由 write_worksheet 寫出（含 BOM），read_worksheet 必須剝除 BOM、第一欄 uid 無殘留 (FR-002)
+    out = tmp_path / "w.csv"
+    csv_io.write_worksheet([MailHeader("10", "Subj", "a@x.com", "Mon", "b@x.com")], "INBOX", out)
+    rows = csv_io.read_worksheet(out)
+    assert rows[0].uid == "10" and rows[0].current_folder == "INBOX"
+
+
+# --- US2: ensure_csv_suffix ---
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [
+        ("inbox", "inbox.csv"),
+        ("inbox.csv", "inbox.csv"),
+        ("data.txt", "data.txt"),
+        ("report.", "report.csv"),
+        ("out/inbox", "out/inbox.csv"),
+        ("a.b.c", "a.b.c"),
+    ],
+)
+def test_ensure_csv_suffix(name, expected):
+    assert csv_io.ensure_csv_suffix(name) == expected
 
 
 # --- US2: write_folders ---
