@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.0] - 2026-06-24
+### Added — 大量信箱的效能與韌性（feature 005, R7）
+- **token 過期 / 連線中斷自動恢復**：操作中途偵測到 session 失效/EOF 時，後端**透明重連**（沿用既有授權**靜默續期** `auth.get_token_silent` → 重建 IMAP 連線 → 重新認證 → 有界退避重試），分類**項目級續做**、匯出**整批重抓**，直到完成。靜默續期不可行（refresh token 失效）→ 擲後端中立的 `ReauthRequired` → cli **乾淨停止**並回報已完成/未完成數（重新登入後以同一份工作表重跑續完，冪等）。重連/續期/重試屬協定細節，僅置於 `imap_client.py`；MSAL 僅靜默路徑在 `auth.py`；client 以注入式 `token_provider`/`on_status` 參與，維持後端隔離、**不新增 runtime 相依**。
+- **韌性設定可調**：`config.json` 可選 `max_consecutive_failures`/`max_reconnect_attempts`/`max_retries_per_op`/`backoff_base_seconds`/`backoff_cap_seconds`（無效/缺漏 → 安全預設、不崩潰）。
+### Changed
+- **同一分類流程整夾標頭只讀一次**：`classifier` 引入共用 `ClassifyCache`，「檢查報告」所讀為權威、`execute` 重用、**不再二次整夾掃描**（來源夾讀取 2→1）；TOCTOU 由搬移動作安全失敗兜（冪等）。`build_report`/`new_folders`/`execute` 新增可選 `cache` 參數（向後相容）。
+- **進度狀態條依迴圈性質啟動**：**網路 in/out 迴圈一律顯示**（不設件數門檻），純 CPU 迴圈維持 >30 才顯示（`progress.reporter(network=...)`）。恢復/重連期間有 `on_status` 狀態提示（編碼安全 stderr，永不含 token）。
+### Tests
+- 模擬器升級擬真：`FakeIMAPConn` 支援 token 過期/EOF 注入（`arm_expiry`，含 `persist`）、session 於重新認證後恢復、`connected_client` 走真實 client 重連路徑。新增「日誌效率斷言」（整夾只讀一次、list 只一次）抓冗餘。187 tests，全程離線、對拍真 imaplib、雙層驗證。
+
 ## [0.5.1] - 2026-06-24
 ### Fixed
 - **致命：匯出工作表 UID 全空（0.5.0 回歸）**。0.5.0 將 `list_headers` 改為分批 UID FETCH 後，FETCH 的 data-items 未顯式索取 `UID`，Outlook 回應 metadata 不含 `UID <n>`，導致每列 `uid` 解析為空字串——匯出的工作表完全無法用於功能3 分類（搬移依 `(current_folder, uid)`）。修法：FETCH 改為 `(UID BODY.PEEK[HEADER.FIELDS (...)])`（UID 置於 BODY 之前）。並加防線：若仍解析不到 UID 即大聲報錯中止，絕不靜默產出缺 UID 的無效工作表。

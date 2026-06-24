@@ -94,6 +94,29 @@ def test_renders_visual_ascii_bar():
     assert "50/50" in out and "100%" in out
 
 
+def test_network_loop_shows_even_below_threshold():
+    # FR-013：網路 in/out 迴圈不設件數門檻 → 即使 ≤30 也顯示
+    s = _Stream(tty=True)
+    with progress.reporter("讀取", network=True, stream=s) as cb:
+        _drive(cb, 3)
+    assert s.getvalue() and "3/3" in s.getvalue()
+
+
+def test_cpu_loop_silent_below_threshold():
+    # FR-013：純 CPU 迴圈維持 >30 才顯示 → 3 筆不顯示
+    s = _Stream(tty=True)
+    with progress.reporter("讀取", network=False, stream=s) as cb:
+        _drive(cb, 3)
+    assert s.getvalue() == ""
+
+
+def test_network_loop_still_silent_on_non_tty():
+    s = _Stream(tty=False)
+    with progress.reporter("讀取", network=True, stream=s) as cb:
+        _drive(cb, 3)
+    assert s.getvalue() == ""  # 非 TTY 仍零輸出（不污染管線）
+
+
 def test_bar_fills_proportionally():
     s = _Stream(tty=True)
     with progress.reporter("讀取", stream=s) as cb:

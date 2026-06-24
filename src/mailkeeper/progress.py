@@ -68,10 +68,20 @@ class _Progress:
 
 @contextmanager
 def reporter(
-    label: str, *, stream: Optional[TextIO] = None, threshold: int = _THRESHOLD
+    label: str,
+    *,
+    network: bool = False,
+    stream: Optional[TextIO] = None,
+    threshold: int = _THRESHOLD,
 ) -> Iterator[ProgressCallback]:
-    """進入：回傳 (done,total) 回呼。離開：乾淨收尾（即使區塊內發生例外）。"""
-    p = _Progress(label, stream if stream is not None else sys.stderr, threshold)
+    """進入：回傳 (done,total) 回呼。離開：乾淨收尾（即使區塊內發生例外）。
+
+    ``network=True``（網路 in/out 迴圈）→ 不設件數門檻、一律顯示（每次往返本就慢，應即時回饋）；
+    ``network=False``（純 CPU 迴圈）→ 維持 ``threshold``（預設 30）才顯示，避免瞬間迴圈閃爍。
+    （仍僅互動 TTY 顯示、非 TTY 零輸出。）
+    """
+    eff_threshold = 0 if network else threshold
+    p = _Progress(label, stream if stream is not None else sys.stderr, eff_threshold)
     try:
         yield p.update
     finally:

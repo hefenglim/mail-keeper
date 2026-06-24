@@ -22,3 +22,10 @@ IMAP_TIMEOUT = 60
 
 # token 快取檔，避免每次都要重新登入
 TOKEN_CACHE_PATH = "token_cache.bin"
+
+# ── R7 韌性預設（可由 config.json 覆寫；無效則退回這些安全值，見 config_store）──
+MAX_CONSECUTIVE_FAILURES = 3   # 連續「真正失敗」達此數 → 停止整體操作
+MAX_RECONNECT_ATTEMPTS = 3     # 單一中斷事件最多重連次數
+MAX_RETRIES_PER_OP = 2         # 單一操作重連後最多重試次數（保留給細粒度重試）
+BACKOFF_BASE_SECONDS = 0.5     # 指數退避起點秒數
+BACKOFF_CAP_SECONDS = 8.0      # 指數退避封頂上限秒數（不超過此值）

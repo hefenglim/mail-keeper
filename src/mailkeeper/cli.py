@@ -3,13 +3,22 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import functools
 import sys
 from typing import Callable, Iterator
 
 from . import __version__, buildinfo, classifier, config_store, console, csv_io, menu, progress
-from .auth import get_access_token
-from .imap_client import BackendError, OutlookIMAPClient
+from .auth import get_access_token, get_token_silent
+from .imap_client import BackendError, OutlookIMAPClient, ReauthRequired
 from .organizer import MailBackend, MailOrganizer, Rule, from_contains, subject_contains
+
+# 網路 in/out 迴圈用的進度工廠：一律顯示狀態條（不設件數門檻；FR-013）。
+_net_reporter = functools.partial(progress.reporter, network=True)
+
+
+def _emit_status(msg: str) -> None:
+    """後端重連/續期/重試時的狀態提示 → 編碼安全 stderr（不污染 stdout 資料輸出）。"""
+    console.safe_print(msg, file=sys.stderr)
 
 
 def build_rules() -> list[Rule]:
@@ -114,8 +123,21 @@ def _connect() -> Iterator[MailBackend]:
         ask=_prompt_choice,
         write_back=config_store.write_email,
     )
+    # R7：注入「僅靜默續期」的 token 提供者（重連時不打斷使用者；無法續期 → ReauthRequired）、
+    # 狀態回呼、與韌性設定。imap_client 不 import MSAL，仍維持後端隔離。
     with OutlookIMAPClient(
-        email, token, host=cfg.imap_host, port=cfg.imap_port, timeout=cfg.timeout
+        email,
+        token,
+        host=cfg.imap_host,
+        port=cfg.imap_port,
+        timeout=cfg.timeout,
+        token_provider=lambda: get_token_silent(cfg),
+        on_status=_emit_status,
+        max_consecutive_failures=cfg.max_consecutive_failures,
+        max_reconnect_attempts=cfg.max_reconnect_attempts,
+        max_retries_per_op=cfg.max_retries_per_op,
+        backoff_base_seconds=cfg.backoff_base_seconds,
+        backoff_cap_seconds=cfg.backoff_cap_seconds,
     ) as client:
         yield client
 
@@ -130,7 +152,7 @@ def _run() -> None:
 
 def export_worksheet(backend: MailBackend, folder: str, out: str) -> None:
     out = csv_io.ensure_csv_suffix(out)
-    with progress.reporter(f"讀取「{folder}」標頭") as on_progress:
+    with progress.reporter(f"讀取「{folder}」標頭", network=True) as on_progress:
         headers = backend.list_headers(folder, on_progress=on_progress)
     csv_io.write_worksheet(headers, folder, out)
     console.safe_print(f"已將資料夾「{folder}」的 {len(headers)} 封郵件匯出到 {out}")
@@ -177,8 +199,10 @@ def classify(
 ) -> None:
     in_path = csv_io.ensure_csv_suffix(in_path)
     rows = csv_io.read_worksheet(in_path)
-    items = classifier.build_report(backend, rows, progress=progress.reporter)
-    _print_report(items, classifier.new_folders(backend, items))
+    # R7：一個共用快取貫穿 report → new_folders → execute，使資料夾清單與來源夾標頭各只讀一次。
+    cache = classifier.ClassifyCache()
+    items = classifier.build_report(backend, rows, cache=cache, progress=_net_reporter)
+    _print_report(items, classifier.new_folders(backend, items, cache=cache))
     if not classifier.candidates(items):
         console.safe_print("沒有需要搬移的列（無變動或皆不可行）。")
         return
@@ -190,13 +214,35 @@ def classify(
         console.safe_print("（預覽）未搬移。確認無誤後加 --run，或於互動中輸入 y 執行。")
         return
 
-    with progress.reporter("搬移分類") as on_progress:
-        results = classifier.execute(
-            backend, items, on_progress=on_progress, progress=progress.reporter
+    total = len(classifier.candidates(items))
+    done_count = {"n": 0}
+    try:
+        with progress.reporter("搬移分類", network=True) as bar:
+            def _on_progress(d: int, t: int) -> None:
+                done_count["n"] = d
+                bar(d, t)
+
+            results = classifier.execute(
+                backend,
+                items,
+                on_progress=_on_progress,
+                progress=_net_reporter,
+                cache=cache,
+                max_consecutive_failures=getattr(backend, "max_consecutive_failures", None),
+            )
+    except ReauthRequired as exc:
+        # 靜默續期不可行 → 乾淨停止：回報已完成/未完成數 + 重新登入指引（冪等重跑）。
+        done = done_count["n"]
+        console.safe_print(
+            f"已搬移 {done} / {total}；其餘 {total - done} 筆因需重新登入而停止：{exc} "
+            "請重新登入後，以同一份工作表再次執行續完（已搬走者會自動跳過）。",
+            file=sys.stderr,
         )
+        return
+
     ok = sum(1 for r in results if r.ok)
     console.safe_print(f"完成：成功搬移 {ok} / {len(results)}。")
-    remaining = len(classifier.candidates(items)) - len(results)
+    remaining = total - len(results)
     if remaining > 0:
         console.safe_print(
             f"⚠ 偵測到連續失敗、疑似連線中斷，已提前停止；剩餘 {remaining} 筆未處理，"

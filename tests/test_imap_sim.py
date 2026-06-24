@@ -5,6 +5,10 @@
 """
 from __future__ import annotations
 
+import imaplib
+
+import pytest
+
 from imap_sim import DELETED, FakeIMAPConn, message
 
 
@@ -123,6 +127,20 @@ def test_store_deleted_flag_then_full_expunge():
 
 
 # --- 動作日誌 ---
+
+def test_arm_expiry_invalidates_until_reauth():
+    # 擬真：第 2 次 move 時 token 過期 → session 失效 → 後續所有指令擲 abort，直到重新認證
+    sim = _inbox(message(10, "A"), message(11, "B"))
+    sim.arm_expiry(before_op="move", nth=2)
+    sim.select("INBOX")
+    assert sim.uid("move", "10", "Archive")[0] == "OK"      # 第 1 次 move OK
+    with pytest.raises(imaplib.IMAP4.abort):
+        sim.uid("move", "11", "Archive")                    # 第 2 次 → 失效
+    with pytest.raises(imaplib.IMAP4.abort):
+        sim.select("INBOX")                                 # 失效後其他指令也擲（EOF 連環）
+    sim.authenticate("XOAUTH2", lambda _: b"x")             # 重新認證 → 恢復
+    assert sim.select("INBOX")[0] == "OK"
+
 
 def test_command_log_records_commands_and_args():
     sim = _inbox(message(10, "A"))

@@ -11,6 +11,7 @@ import os
 import msal  # type: ignore[import-untyped]  # msal 未提供型別 stub
 
 from .config_store import Configuration
+from .imap_client import ReauthRequired
 
 
 def _load_cache(path: str) -> msal.SerializableTokenCache:
@@ -35,6 +36,25 @@ def _username(app: msal.PublicClientApplication, result: dict) -> str:
         return str(name)
     accounts = app.get_accounts()
     return str(accounts[0]["username"]) if accounts else ""
+
+
+def get_token_silent(cfg: Configuration) -> str:
+    """僅靜默續期：以既有快取帳號的 refresh token 取得新的 access token。
+
+    無快取帳號 / refresh token 失效或被撤銷 → 擲 :class:`ReauthRequired`；
+    **絕不**退化為互動式 device flow（供 R7 重連時背景續期，不打斷使用者）。
+    """
+    cache = _load_cache(cfg.token_cache_path)
+    app = msal.PublicClientApplication(
+        cfg.client_id, authority=cfg.authority, token_cache=cache
+    )
+    accounts = app.get_accounts()
+    if accounts:
+        result = app.acquire_token_silent(cfg.scopes, account=accounts[0])
+        if result and "access_token" in result:
+            _save_cache(cache, cfg.token_cache_path)
+            return str(result["access_token"])
+    raise ReauthRequired("需重新登入：無法以既有授權靜默續期，請重新執行以登入。")
 
 
 def get_access_token(cfg: Configuration) -> tuple[str, str]:
