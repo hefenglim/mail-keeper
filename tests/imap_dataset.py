@@ -2,12 +2,12 @@
 
 涵蓋測試需驗證的各種情境（ASCII / CJK / emoji / 帶引號顯示名 / 已讀 / 使用者已標刪 /
 空主旨 / 超長主旨 / 收件者 / 巢狀夾 / CJK 夾名）。每次 :func:`master_mailboxes` 都建構**全新**
-物件（深拷貝語意），故各 :func:`fresh_sim` 互相獨立、互不汙染。測試一律從此母版複製一份出發，
-之後可雙層驗證：(1) 指令動作日誌 ``sim.log``、(2) ``sim.snapshot()`` 前後資料變動。
+物件（深拷貝語意），故各 :func:`fresh_server` 互相獨立、互不汙染。測試一律從此母版複製一份出發，
+之後可雙層驗證：(1) 結構化命令日誌 ``server.log``、(2) ``server.snapshot()`` 前後資料變動。
 """
 from __future__ import annotations
 
-from imap_sim import DELETED, SEEN, FakeIMAPConn, SimMessage, message
+from imap_sim import DELETED, SEEN, SimMessage, message
 
 # 具名常數：測試引用「眾所周知」的郵件，避免魔術數字。
 INBOX_NEWSLETTER_UID = 101
@@ -50,15 +50,6 @@ def master_mailboxes() -> dict[str, list[SimMessage]]:
             message(401, "在地通知", "local@x.com", "me@outlook.my", "Thu"),
         ],
     }
-
-
-def fresh_sim(**opts) -> FakeIMAPConn:
-    """從母版複製一份，建構一個獨立的 FakeIMAPConn（opts 透傳：supports_move/uidplus 等）。
-
-    註：FakeIMAPConn 為舊高階假物（直接替身 imaplib）；新測試請改用 :func:`fresh_server`
-    搭配 ``imap_transport.connected_client`` —— 讓**真 imaplib** 跑在線級引擎上（P3 遷移方向）。
-    """
-    return FakeIMAPConn(master_mailboxes(), **opts)
 
 
 def fresh_server(**opts):

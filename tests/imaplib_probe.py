@@ -1,7 +1,8 @@
 """以記憶體腳本驅動**真正的 imaplib** 命令/解析迴圈（不碰真實 socket）。
 
 用途：把符合 RFC 3501 的原始 wire bytes 餵進產品實際使用的 imaplib 解析器，取得它解析出的
-`(typ, data)` 結構，作為「真實規格」的權威基準，去對拍 FakeIMAPConn 的輸出（見 test_imap_fidelity）。
+`(typ, data)` 結構，作為「真實規格」的權威基準，去對拍**引擎吐出的 wire**（見
+`test_imap_server.py` section B：引擎 FETCH/SEARCH wire 經本 probe 解析、斷言結構與位元組正確）。
 這是「不確定規格就拿真的跑一次確認」的離線等價。
 """
 from __future__ import annotations

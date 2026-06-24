@@ -3,13 +3,15 @@
 驗證策略（三角驗證，可信度最大化）：
   A. **真產品跑真 imaplib over 引擎**：``OutlookIMAPClient`` 連線/列夾/列標頭全程零改動，結果正確
      → 證明引擎的 wire 序列化能被真 imaplib 解析、且語意正確（比任何假物替身更強）。
-  B. **引擎 ≡ 真 imaplib ≡ 既有 FakeIMAPConn**：把引擎吐的 FETCH wire 餵進 ``imaplib_probe``（真
-     imaplib 解析），與 FakeIMAPConn 對同邏輯的輸出逐位元組相同。
+  B. **引擎 ≡ 真 imaplib**：把引擎吐的 wire 餵進 ``imaplib_probe``（真 imaplib 解析），斷言解析出的
+     結構與 literal 位元組逐一正確（不依賴任何假物——真 imaplib 才是規格基準）。
   C. **雙層驗證**：結構化命令 log（送出指令/只讀/影響 UID 正確、UID 不變量）+ 狀態快照（讀取不變更）。
 """
 from __future__ import annotations
 
 import base64
+import email
+import re
 
 import pytest
 
@@ -23,10 +25,10 @@ from imap_dataset import (
     master_mailboxes,
 )
 from imap_server import ImapServer
-from imap_sim import FakeIMAPConn, client_on, message
+from imap_sim import message
 from imap_transport import SimIMAP4_SSL, connected_client, install_server
 
-from mailkeeper.imap_client import BackendError, OutlookIMAPClient
+from mailkeeper.imap_client import BackendError, OutlookIMAPClient, _decode
 
 _ITEMS = "(UID BODY.PEEK[HEADER.FIELDS (SUBJECT FROM TO DATE)])"
 
@@ -94,19 +96,10 @@ def test_connect_passes_configured_timeout(monkeypatch):
     assert cap["timeout"] == 42 and cap["constructed"] == 1
 
 
-# ── B. 引擎 ≡ 真 imaplib ≡ FakeIMAPConn（三方對拍）──────────────────────────
-
-def test_engine_headers_equal_fake_backend(monkeypatch):
-    # 真 imaplib over 引擎，與「直接跑 FakeIMAPConn」的領域結果逐封相同 → 行為等價
-    over_engine = connected_client(monkeypatch, _server()).list_headers("INBOX")
-    over_fake = client_on(FakeIMAPConn(master_mailboxes())).list_headers("INBOX")
-    assert over_engine == over_fake
-
+# ── B. 引擎 ≡ 真 imaplib（引擎吐的 wire 經真 imaplib 解析，斷言結構/位元組正確，無假物依賴）──
 
 def test_engine_fetch_wire_matches_real_imaplib():
-    # 把引擎吐的 FETCH wire 餵進真 imaplib（probe），與 FakeIMAPConn 對同邏輯的解析輸出逐位元組相同
-    msgs = [message(10, "Hello", "a@x.com", "me@x.com", "Mon, 1 Jan 2026")]
-    server = ImapServer({"INBOX": list(msgs)})
+    server = ImapServer({"INBOX": [message(10, "Hello", "a@x.com", "me@x.com", "Mon, 1 Jan 2026")]})
     server.feed(b"a1 CAPABILITY")
     server.feed(b"a2 AUTHENTICATE XOAUTH2")
     server.feed(base64.b64encode(b"user=me\x01auth=Bearer t\x01\x01"))
@@ -114,22 +107,23 @@ def test_engine_fetch_wire_matches_real_imaplib():
     resp = server.feed(b"a4 UID FETCH 10 " + _ITEMS.encode())
     wire = resp.split(b"a4 OK")[0]  # 取 untagged FETCH 部分（含 literal），其餘交給 probe 補 tagged
 
-    real = probe.real_uid_fetch(wire, "10", _ITEMS)
-    fake = FakeIMAPConn({"INBOX": list(msgs)})
-    fake.select("INBOX", readonly=True)
-    assert real == fake.uid("fetch", "10", _ITEMS)
+    typ, data = probe.real_uid_fetch(wire, "10", _ITEMS)
+    assert typ == "OK"
+    meta, literal = data[0]
+    assert b"UID 10" in meta and b"BODY[HEADER.FIELDS" in meta  # metadata 帶 UID + BODY
+    assert data[1] == b")"                                       # literal 後接 )
+    # literal 為 RFC 標頭區塊、位元組逐一相符（真 imaplib 依宣告的 {N} 精確讀取）
+    assert literal == b"Subject: Hello\r\nFrom: a@x.com\r\nTo: me@x.com\r\nDate: Mon, 1 Jan 2026\r\n\r\n"
 
 
-def test_engine_fetch_wire_matches_real_imaplib_for_tricky_subjects():
-    # SR 條件：把「危險母版郵件」(CJK / emoji / 空主旨 / 超長主旨) 的 FETCH wire 餵進真 imaplib，
-    # 與 FakeIMAPConn 對同郵件的解析逐位元組相同 → literal 位元組數路徑在 *wire 層* 被釘死
-    # （非只在領域層）。多位元組 UTF-8 encoded-word 的 {N} 長度最易出錯，於此正面對拍。
+def test_engine_fetch_wire_tricky_subjects_byte_lengths_correct():
+    # 危險母版郵件（CJK/emoji/空/超長）的 FETCH wire 經真 imaplib 解析：encoded-word literal 的
+    # {N} 位元組數正確（真 imaplib 會精確讀 {N} 位元組，錯了即解析失敗），且能還原回原主旨。
     tricky_uids = (INBOX_CJK_UID, INBOX_EMOJI_UID, INBOX_EMPTY_SUBJECT_UID, INBOX_LONG_SUBJECT_UID)
+    inbox = [m for m in master_mailboxes()["INBOX"] if m.uid in tricky_uids]
+    by_uid = {m.uid: m for m in inbox}
 
-    def _tricky():  # 每次取一份獨立的母版郵件物件
-        return [m for m in master_mailboxes()["INBOX"] if m.uid in tricky_uids]
-
-    server = ImapServer({"INBOX": _tricky()})
+    server = ImapServer({"INBOX": list(inbox)})
     server.feed(b"a2 AUTHENTICATE XOAUTH2")
     server.feed(base64.b64encode(b"x"))
     server.feed(b"a3 EXAMINE INBOX")
@@ -137,10 +131,14 @@ def test_engine_fetch_wire_matches_real_imaplib_for_tricky_subjects():
     resp = server.feed(f"a4 UID FETCH {uidset} ".encode() + _ITEMS.encode())
     wire = resp.split(b"a4 OK")[0]
 
-    real = probe.real_uid_fetch(wire, uidset, _ITEMS)
-    fake = FakeIMAPConn({"INBOX": _tricky()})
-    fake.select("INBOX", readonly=True)
-    assert real == fake.uid("fetch", uidset, _ITEMS)
+    typ, data = probe.real_uid_fetch(wire, uidset, _ITEMS)
+    assert typ == "OK"
+    tuples = [d for d in data if isinstance(d, tuple)]
+    assert len(tuples) == len(tricky_uids)  # 四封皆完整解析（literal {N} 全部正確）
+    for meta, literal in tuples:
+        uid = int(re.search(rb"UID (\d+)", meta).group(1))  # type: ignore[union-attr]
+        subject = _decode(email.message_from_bytes(literal).get("Subject"))
+        assert subject == by_uid[uid].fields["SUBJECT"]  # 真 imaplib 讀出的 literal 還原回原主旨
 
 
 def test_engine_search_wire_matches_real_imaplib():
