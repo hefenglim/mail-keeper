@@ -139,6 +139,12 @@ class ImapServer:
         self._authenticated = False
         self._pending_sasl: Optional[tuple[bytes, str]] = None  # (tag, mechanism) 等待 SASL 續傳回應
 
+        # 失效注入（P2，傳輸/協定層）：擬真 token 過期→session 作廢→EOF 連環，及 OSError/SSLError/BYE/authfail。
+        self._alive = True
+        self._socket_dead: Optional[str] = None  # None / 'oserror' / 'sslerror'（transport 讀取時據此 raise；'eof' 由空緩衝自然 EOF）
+        self._arm: Optional[tuple[str, int, str, bool]] = None  # (op_kind, nth, mode, persist)
+        self._op_counts: dict[str, int] = {}
+
         # 驗證數據面。
         self.wire_in: list[bytes] = []
         self.wire_out: list[bytes] = []
@@ -157,7 +163,14 @@ class ImapServer:
         return caps
 
     def greeting(self) -> bytes:
-        """連線招呼（由傳輸層在 open() 時注入緩衝，imaplib `_connect` 會讀它判定 NONAUTH）。"""
+        """連線招呼（由傳輸層在 open() 時注入緩衝，imaplib `_connect` 會讀它判定 NONAUTH）。
+
+        每條新連線都呼叫一次 → 重置「連線存活 / socket 失效」旗標（重連後的新 session 恢復健康，
+        但 `_op_counts` 不重置：一次性 arm 不再觸發、persist arm 於重連後該操作仍再次觸發）。
+        """
+        self._alive = True
+        self._socket_dead = None
+        self._pending_sasl = None
         g = f"* OK [CAPABILITY {' '.join(self._capabilities())}] MailKeeper IMAP simulator ready".encode() + CRLF
         self.wire_out.append(g)
         return g
@@ -168,15 +181,20 @@ class ImapServer:
         self.wire_in.append(line)
         if self._pending_sasl is not None:
             resp = self._finish_authenticate(line)
+        elif not self._alive:
+            resp = b""  # 連線已失效（EOF 連環）：持續回空，直到用戶端重連（greeting 重置）
         else:
-            resp = self._dispatch(line)
+            failure = self._arm_check(self._op_kind(line))
+            resp = self._trigger_failure(failure, line) if failure else self._dispatch(line)
         self.wire_out.append(resp)
         return resp
 
     def _dispatch(self, line: bytes) -> bytes:
         parts = line.split(b" ", 2)
         if len(parts) < 2:
-            return b"* BAD malformed command" + CRLF
+            # 真 imaplib 必送「tag 命令」；走到這代表測試/引擎有 bug → 大聲失敗，絕不回會讓
+            # `_get_tagged_response` 空轉的 untagged BAD（遞延自 P1 SR 的收斂條件）。
+            raise AssertionError(f"引擎收到無 tag/命令的畸形行（真 imaplib 不該送出）：{line!r}")
         tag = parts[0]
         command = parts[1].upper().decode("ascii", "replace")
         rest = parts[2] if len(parts) > 2 else b""
@@ -185,6 +203,67 @@ class ImapServer:
             self._record(tag, command, (), None, (), "BAD", None)
             return self._tagged(tag, "BAD", f"{command} not supported by simulator")
         return handler(tag, rest)
+
+    # ---------- 失效注入（P2）：擬真 token 過期 / 連線中斷 / 協定錯誤 ----------
+    def arm_expiry(self, *, before_op: str, nth: int = 1, mode: str = "eof", persist: bool = False) -> None:
+        """安排「第 nth 次 ``before_op`` 操作時 session 失效」（觸發前不執行該操作 → 不誤動資料）。
+
+        ``mode``（一套注入即覆蓋產品 ``_is_session_lost`` 的全部真實入口）：
+          * ``eof``      —— 伺服器靜默關閉連線：feed 回空 bytes → 真 imaplib readline 讀到 EOF →
+                            ``abort('socket error: EOF')``（實測 Outlook token 過期的主路徑）。
+          * ``oserror`` / ``sslerror`` —— 傳輸層 read 拋 OSError / ssl.SSLError（先前未測分支）。
+          * ``bye``      —— 伺服器送 ``* BYE`` → imaplib ``_check_bye`` → abort。
+          * ``authfail`` —— tagged ``BAD [AUTHENTICATIONFAILED]`` → imaplib 拋 error 含標記（先前未測）。
+        ``persist=True``：每次（含重連後）該操作都再次失敗（→ 重連用盡仍失敗）；否則一次性
+        （重連後即恢復）。``before_op``：命令名或 UID 子命令（如 'MOVE'/'FETCH'/'SELECT'）。
+        """
+        self._arm = (before_op.upper(), nth, mode, persist)
+
+    def _op_kind(self, line: bytes) -> str:
+        parts = line.split(b" ", 2)
+        if len(parts) < 2:
+            return ""
+        cmd = parts[1].upper().decode("ascii", "replace")
+        if cmd == "UID" and len(parts) > 2:
+            return parts[2].split(b" ", 1)[0].upper().decode("ascii", "replace")
+        return cmd
+
+    def _arm_check(self, op_kind: str) -> Optional[str]:
+        if op_kind:
+            self._op_counts[op_kind] = self._op_counts.get(op_kind, 0) + 1
+        if self._arm is None or not op_kind:
+            return None
+        a_op, a_nth, a_mode, a_persist = self._arm
+        if op_kind != a_op:
+            return None
+        count = self._op_counts.get(op_kind, 0)
+        if (count >= a_nth) if a_persist else (count == a_nth):
+            if not a_persist:
+                self._arm = None  # 一次性
+            return a_mode
+        return None
+
+    def _trigger_failure(self, mode: str, line: bytes) -> bytes:
+        tag = line.split(b" ", 1)[0]
+        if mode in ("eof", "oserror", "sslerror"):
+            self._alive = False
+            self._socket_dead = None if mode == "eof" else mode
+            return b""  # eof：空 inbuf → imaplib EOF abort；oserror/sslerror：transport read 時拋
+        if mode == "bye":
+            self._alive = False
+            return self._untagged("BYE session terminated - AccessTokenExpired")
+        if mode == "authfail":
+            return self._tagged(tag, "BAD", "[AUTHENTICATIONFAILED] Session invalidated - AccessTokenExpired")
+        raise AssertionError(f"未知失效注入模式：{mode}")
+
+    def raise_if_socket_dead(self) -> None:
+        """供傳輸層 read/readline 呼叫：oserror/sslerror 模式時拋對應例外（eof 由空緩衝自然 EOF）。"""
+        if self._socket_dead == "oserror":
+            raise OSError("simulated connection reset by peer")
+        if self._socket_dead == "sslerror":
+            import ssl
+
+            raise ssl.SSLError("simulated SSL error during session")
 
     # ---------- handlers：連線 / 認證 ----------
     def _cmd_capability(self, tag: bytes, rest: bytes) -> bytes:
@@ -254,6 +333,25 @@ class ImapServer:
         self._record(tag, verb, (name,), name, (), "OK", code)
         return body
 
+    # ---------- handlers：CREATE（確保資料夾）----------
+    def _cmd_create(self, tag: bytes, rest: bytes) -> bytes:
+        name = _unquote(rest.decode("utf-8", "replace"))
+        if name in self.mailboxes:
+            self._record(tag, "CREATE", (name,), name, (), "NO", "ALREADYEXISTS")
+            return self._tagged(tag, "NO", "[ALREADYEXISTS] Mailbox already exists")
+        self.mailboxes[name] = []
+        self._uidnext[name] = 1
+        self._uidvalidity[name] = 2000 + len(self.mailboxes)
+        self._record(tag, "CREATE", (name,), name, (), "OK", None)
+        return self._tagged(tag, "OK", "CREATE completed")
+
+    # ---------- handlers：整夾 EXPUNGE（fallback 用；清選取夾所有 \Deleted）----------
+    def _cmd_expunge(self, tag: bytes, rest: bytes) -> bytes:
+        uids = [m.uid for m in self._sel_msgs() if DELETED in m.flags]
+        lines, removed = self._do_expunge(uids)
+        self._record(tag, "EXPUNGE", (), self._selected, tuple(removed), "OK", None)
+        return lines + self._tagged(tag, "OK", "EXPUNGE completed")
+
     # ---------- handlers：LIST ----------
     def _cmd_list(self, tag: bytes, rest: bytes) -> bytes:
         lines = b"".join(
@@ -271,9 +369,16 @@ class ImapServer:
             return self._uid_search(tag, tail)
         if sub_u == "FETCH":
             return self._uid_fetch(tag, tail)
-        # P2 將補：MOVE / COPY / STORE / EXPUNGE（已留分派點）。
+        if sub_u == "MOVE":
+            return self._uid_move(tag, tail)
+        if sub_u == "COPY":
+            return self._uid_copy(tag, tail)
+        if sub_u == "STORE":
+            return self._uid_store(tag, tail)
+        if sub_u == "EXPUNGE":
+            return self._uid_expunge(tag, tail)
         self._record(tag, f"UID {sub_u}", (), self._selected, (), "BAD", None)
-        return self._tagged(tag, "BAD", f"UID {sub_u} not supported by simulator (P1)")
+        return self._tagged(tag, "BAD", f"UID {sub_u} not supported by simulator")
 
     def _uid_search(self, tag: bytes, criteria: bytes) -> bytes:
         msgs = self._sel_msgs()
@@ -339,14 +444,112 @@ class ImapServer:
                 out += (head + (" " + " ".join(suffix) if suffix else "") + ")").encode() + CRLF
         return out
 
-    # ---------- 內部：選取狀態 ----------
-    def _sel_msgs(self) -> list[SimMessage]:
+    # ---------- handlers：UID MOVE / COPY / STORE / EXPUNGE（破壞性，鏡像 FakeIMAPConn 語意）----------
+    def _uid_move(self, tag: bytes, tail: bytes) -> bytes:
+        uid_s, _, dest_b = tail.partition(b" ")
+        dest = _unquote(dest_b.decode("utf-8", "replace"))
+        uid = int(uid_s)
+        if not self._supports_move:
+            self._record(tag, "UID MOVE", (uid_s.decode(), dest), self._selected, (), "NO", None)
+            return self._tagged(tag, "NO", "MOVE not supported")
+        src = self._sel_name()
+        if dest not in self.mailboxes:
+            self._record(tag, "UID MOVE", (uid_s.decode(), dest), src, (), "NO", "TRYCREATE")
+            return self._tagged(tag, "NO", "[TRYCREATE] Mailbox doesn't exist")
+        m = self._find(src, uid)
+        if m is None:
+            self._record(tag, "UID MOVE", (uid_s.decode(), dest), src, (), "NO", None)
+            return self._tagged(tag, "NO", "No matching message")
+        self.mailboxes[src].remove(m)
+        copy = self._append_copy(dest, m)
+        self._record(tag, "UID MOVE", (uid_s.decode(), dest), src, (uid,), "OK", "COPYUID")
+        return self._tagged(tag, "OK", f"[COPYUID {self._uidvalidity.get(dest, 1)} {uid} {copy.uid}] MOVE completed")
+
+    def _uid_copy(self, tag: bytes, tail: bytes) -> bytes:
+        uid_s, _, dest_b = tail.partition(b" ")
+        dest = _unquote(dest_b.decode("utf-8", "replace"))
+        uid = int(uid_s)
+        src = self._sel_name()
+        if dest not in self.mailboxes:
+            self._record(tag, "UID COPY", (uid_s.decode(), dest), src, (), "NO", "TRYCREATE")
+            return self._tagged(tag, "NO", "[TRYCREATE] Mailbox doesn't exist")
+        m = self._find(src, uid)
+        if m is None:
+            self._record(tag, "UID COPY", (uid_s.decode(), dest), src, (), "NO", None)
+            return self._tagged(tag, "NO", "No matching message")
+        copy = self._append_copy(dest, m)  # 來源保留（複本配發新 UID）
+        self._record(tag, "UID COPY", (uid_s.decode(), dest), src, (uid,), "OK", "COPYUID")
+        return self._tagged(tag, "OK", f"[COPYUID {self._uidvalidity.get(dest, 1)} {uid} {copy.uid}] COPY completed")
+
+    def _uid_store(self, tag: bytes, tail: bytes) -> bytes:
+        uid_s, _, rest2 = tail.partition(b" ")
+        op_b, _, flags_b = rest2.partition(b" ")
+        op = op_b.decode("ascii", "replace")
+        flags_str = flags_b.decode("ascii", "replace")
+        m = self._find(self._sel_name(), int(uid_s))
+        if m is None:
+            self._record(tag, "UID STORE", (uid_s.decode(), op, flags_str), self._selected, (), "NO", None)
+            return self._tagged(tag, "NO", "No matching message")
+        parsed = {f if f.startswith("\\") else "\\" + f for f in re.findall(r"\\?\w+", flags_str.strip("()"))}
+        if op.startswith("+"):
+            m.flags |= parsed
+        elif op.startswith("-"):
+            m.flags -= parsed
+        else:
+            m.flags = parsed
+        seq = self._seq_of(m)
+        self._record(tag, "UID STORE", (uid_s.decode(), op, flags_str), self._selected, (int(uid_s),), "OK", None)
+        return self._untagged(f"{seq} FETCH (FLAGS ({' '.join(sorted(m.flags))}))") + self._tagged(
+            tag, "OK", "UID STORE completed"
+        )
+
+    def _uid_expunge(self, tag: bytes, tail: bytes) -> bytes:
+        if not self._supports_uidplus:
+            self._record(tag, "UID EXPUNGE", (tail.decode("ascii", "replace"),), self._selected, (), "NO", None)
+            return self._tagged(tag, "NO", "UIDPLUS not supported")
+        targets = set(_parse_uidset(tail))
+        # 只清「指定 UID 且確實標 \Deleted」者——絕不波及他人已標刪郵件（資料安全鐵則）。
+        uids = [m.uid for m in self._sel_msgs() if m.uid in targets and DELETED in m.flags]
+        lines, removed = self._do_expunge(uids)
+        self._record(tag, "UID EXPUNGE", (tail.decode("ascii", "replace"),), self._selected, tuple(removed), "OK", None)
+        return lines + self._tagged(tag, "OK", "UID EXPUNGE completed")
+
+    # ---------- 內部：選取狀態 + 資料變動 ----------
+    def _sel_name(self) -> str:
         if self._selected is None:
             raise AssertionError("尚未 SELECT 任何信箱（引擎收到需選取的指令）")
-        return self.mailboxes[self._selected]
+        return self._selected
+
+    def _sel_msgs(self) -> list[SimMessage]:
+        return self.mailboxes[self._sel_name()]
 
     def _seq_of(self, m: SimMessage) -> int:
         return self._sel_msgs().index(m) + 1  # IMAP 序號自 1 起
+
+    def _find(self, mailbox: str, uid: int) -> Optional[SimMessage]:
+        for m in self.mailboxes.get(mailbox, []):
+            if m.uid == uid:
+                return m
+        return None
+
+    def _append_copy(self, dest: str, src_msg: SimMessage) -> SimMessage:
+        new_uid = self._uidnext.get(dest, 1)
+        self._uidnext[dest] = new_uid + 1
+        copy = SimMessage(new_uid, dict(src_msg.fields), set())  # 新夾、新 UID、旗標不沿用
+        self.mailboxes.setdefault(dest, []).append(copy)
+        return copy
+
+    def _do_expunge(self, uids: list[int]) -> tuple[bytes, list[int]]:
+        sel = self._sel_name()
+        lines = b""
+        removed: list[int] = []
+        for uid in uids:
+            m = self._find(sel, uid)
+            if m is not None:
+                lines += self._untagged(f"{self._seq_of(m)} EXPUNGE")  # 序號於移除當下計算（後續自動下移）
+                self.mailboxes[sel].remove(m)
+                removed.append(uid)
+        return lines, removed
 
     # ---------- 序列化助手 ----------
     @staticmethod

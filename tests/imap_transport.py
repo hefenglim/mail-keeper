@@ -39,11 +39,13 @@ class SimIMAP4_SSL(imaplib.IMAP4_SSL):
         return None
 
     def read(self, size: int) -> bytes:
+        self._server.raise_if_socket_dead()  # 失效注入：oserror/sslerror 模式於讀取時拋（擬真斷線）
         data = bytes(self._inbuf[:size])
         del self._inbuf[:size]
         return data
 
     def readline(self) -> bytes:
+        self._server.raise_if_socket_dead()  # 同上；eof 模式則由空緩衝自然 EOF（→ imaplib abort）
         idx = self._inbuf.find(b"\r\n")
         if idx == -1:  # 引擎一律回完整 CRLF 行；走到這代表緩衝已空 → imaplib 視為 EOF/abort
             line = bytes(self._inbuf)
