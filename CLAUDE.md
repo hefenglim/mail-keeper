@@ -106,6 +106,25 @@ touching the real IMAP protocol and is where the highest-risk bugs hide. For ANY
    `sim.uid_commands(...)`) — the dispatched IMAP commands/args/order are correct and safe; (2) `sim.snapshot()`
    before vs after — the data mutations are correct (and nothing else changed; e.g. a foreign `\Deleted` message
    is never collaterally expunged).
+
+**Wire-level engine (the bedrock's strongest form; P1–P2 landed on `chore/imap-server-sim`):** prefer the
+**real `imaplib.IMAP4_SSL` over the in-memory server engine** — `tests/imap_server.py::ImapServer` (bytes-in/out
+IMAP server) behind `tests/imap_transport.py::SimIMAP4_SSL` (`install_server`/`connected_client`/`fresh_server`).
+The product runs **genuine imaplib**; only the socket is swapped → fidelity is automatic. New product-behavior
+tests use `fresh_server()` + `connected_client`, not the legacy `FakeIMAPConn` (migration in progress).
+- **imaplib reference source = `imaplib/imaplib.py` (vendored, v2.60; gitignored).** Whenever you are unsure
+  what bytes the simulator must return to the upper layer, **consult that source (or do a real run) — never
+  guess.** Caveat: the product actually runs the *stdlib* imaplib (`C:\Python312\Lib\imaplib.py`, 3.12.x); 2.60
+  differs only in transport internals (`_readbuf`/`sock.recv` vs `file`), NOT in the parse paths the engine
+  targets — and `SimIMAP4_SSL` overrides the transport entirely, so it is version-independent. Fidelity is
+  pinned by cross-checking the engine's wire against the **running stdlib** via `tests/imaplib_probe.py`.
+- **Loop-regression tests MUST run through the simulator and analyze its log data (non-negotiable).** Any
+  bulk-mail / loop behavior (classify/export over many messages, reconnect-mid-loop) is exercised on the engine,
+  then asserted via its log analytics: `server.loop_report()` (`redundant_full_folder_reads` must be empty —
+  no redundant whole-folder re-fetch; `fetches_per_folder`, `command_counts`, `roundtrips`, `bytes_*` for
+  bottleneck analysis), `server.assert_all_fetches_request_uid()` (pins the 0.5.x UID regression class), and the
+  before/after `snapshot()`. See `tests/test_imap_loop_regression.py`. The log is also the efficiency oracle —
+  it surfaces wasted work (e.g. re-`SELECT`ing an already-selected folder per move) for optimization.
 - Keep `imap_client.py` coverage ≥ 88% (CI gate, `.github/workflows/ci.yml`).
 - Run `doc/release-smoke.md` (real account) before every release — the only check that hits a real server.
 

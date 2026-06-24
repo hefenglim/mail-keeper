@@ -38,9 +38,9 @@ from imap_sim import (  # noqa: F401  (DELETED/SEEN 供 P2 與測試引用)
     DELETED,
     SEEN,
     SimMessage,
-    _HEADER_TITLE,
     _encode_mutf7,
     _parse_uidset,
+    _render_header_literal,  # 單一可信來源：FETCH 表頭 literal 序列化（與 FakeIMAPConn 共用，消 C3 漂移）
     _unquote,
     message,
 )
@@ -69,34 +69,6 @@ class ServerOp:
         uids = f" uids={list(self.affected_uids)}" if self.affected_uids else ""
         code = f" [{self.response_code}]" if self.response_code else ""
         return f"#{self.seq} {self.tag} {self.command} -> {self.result_typ}{code}{extra}{uids}"
-
-
-# ── 純函式：FETCH 表頭 literal 的序列化（與真實郵件位元組流一致）──────────────
-
-def _encode_header_value(value: str) -> str:
-    """ASCII 直接輸出；含非 ASCII → RFC 2047 ``=?UTF-8?B?...?=``（如真實郵件表頭存放）。"""
-    try:
-        value.encode("ascii")
-        return value
-    except UnicodeEncodeError:
-        return "=?UTF-8?B?" + base64.b64encode(value.encode("utf-8")).decode("ascii") + "?="
-
-
-def _render_header(m: SimMessage, section: str) -> bytes:
-    """產生 ``BODY[HEADER.FIELDS (...)]`` 的 literal：依索取欄位輸出、結尾空行。
-
-    非 ASCII 值以 RFC 2047 encoded-word 編碼（真實郵件即如此存放），確保產品端解碼路徑
-    ``_decode`` 被真實位元組流驅動；空值欄位（如空主旨）略過不輸出。
-    """
-    fm = re.search(r"HEADER\.FIELDS\s*\(([^)]*)\)", section, re.IGNORECASE)
-    names = fm.group(1).split() if fm else list(m.fields.keys())
-    lines = []
-    for raw in names:
-        key = raw.upper()
-        if key in m.fields and m.fields[key]:
-            title = _HEADER_TITLE.get(key, raw)
-            lines.append(f"{title}: {_encode_header_value(m.fields[key])}")
-    return ("\r\n".join(lines) + "\r\n\r\n").encode("utf-8")
 
 
 class ImapServer:
@@ -433,7 +405,7 @@ class ImapServer:
                     (suffix if hit_body else prefix).append(f"FLAGS ({' '.join(sorted(m.flags))})")
                 elif tok == "BODY":
                     section = body_m.group(1)  # type: ignore[union-attr]
-                    literal = _render_header(m, section)
+                    literal = _render_header_literal(m, section)
                     prefix.append(f"BODY[{section}] {{{len(literal)}}}")
                     hit_body = True
             head = f"* {seq} FETCH (" + " ".join(prefix)
@@ -603,6 +575,33 @@ class ImapServer:
             if op.command == "UID FETCH" and "UID" not in (op.args[1] if len(op.args) > 1 else "")
         ]
         assert not bad, f"發現未索取 UID 的 FETCH（會導致 uid 全空）：{bad}"
+
+    def loop_report(self) -> dict:
+        """彙整一次操作的 loop-regression / 效能分析數據（大量郵件迴圈回歸的單一檢驗面）。
+
+        關鍵欄位 ``redundant_full_folder_reads`` 非空 = 同一來源夾整夾標頭被重抓（冗餘下載、
+        效能回歸——對照 [[no-redundant-refetch]] 鐵則）。其餘供往返/位元組/各命令次數的瓶頸分析。
+        """
+        counts: dict[str, int] = {}
+        fetches: dict[str, int] = {}
+        for op in self.log:
+            counts[op.command] = counts.get(op.command, 0) + 1
+            if op.command == "UID FETCH":
+                mb = op.mailbox or "?"
+                fetches[mb] = fetches.get(mb, 0) + 1
+        destructive = sum(
+            counts.get(k, 0) for k in ("UID MOVE", "UID COPY", "UID STORE", "UID EXPUNGE", "EXPUNGE")
+        )
+        return {
+            "roundtrips": len(self.log),
+            "bytes_in": sum(len(b) for b in self.wire_in),
+            "bytes_out": sum(len(b) for b in self.wire_out),
+            "command_counts": counts,
+            "fetches_per_folder": fetches,
+            "redundant_full_folder_reads": {mb: n for mb, n in fetches.items() if n > 1},
+            "authentications": counts.get("AUTHENTICATE", 0),
+            "destructive_ops": destructive,
+        }
 
     def dump(self) -> str:
         """除錯用：一次吐 wire transcript + 結構化 log + 快照（失敗時貼上即可定位）。"""

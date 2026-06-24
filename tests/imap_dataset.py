@@ -53,5 +53,18 @@ def master_mailboxes() -> dict[str, list[SimMessage]]:
 
 
 def fresh_sim(**opts) -> FakeIMAPConn:
-    """從母版複製一份，建構一個獨立的 FakeIMAPConn（opts 透傳：supports_move/uidplus 等）。"""
+    """從母版複製一份，建構一個獨立的 FakeIMAPConn（opts 透傳：supports_move/uidplus 等）。
+
+    註：FakeIMAPConn 為舊高階假物（直接替身 imaplib）；新測試請改用 :func:`fresh_server`
+    搭配 ``imap_transport.connected_client`` —— 讓**真 imaplib** 跑在線級引擎上（P3 遷移方向）。
+    """
     return FakeIMAPConn(master_mailboxes(), **opts)
+
+
+def fresh_server(**opts):
+    """從母版複製一份，建構一個獨立的 ``imap_server.ImapServer``（線級引擎；opts 透傳
+    supports_move/uidplus 等）。搭配 ``imap_transport.install_server``/``connected_client``，
+    讓**真 imaplib** 跑在引擎之上——P3 起所有產品行為測試的單一可信入口。"""
+    from imap_server import ImapServer
+
+    return ImapServer(master_mailboxes(), **opts)

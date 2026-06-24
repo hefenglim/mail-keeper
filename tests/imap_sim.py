@@ -133,6 +133,36 @@ def _parse_uidset(spec: Any) -> list[int]:
 _HEADER_TITLE = {"SUBJECT": "Subject", "FROM": "From", "TO": "To", "DATE": "Date"}
 
 
+def _encode_header_value(value: str) -> str:
+    """ASCII 直接輸出；含非 ASCII → RFC 2047 ``=?UTF-8?B?...?=``（如真實郵件表頭）。
+
+    模擬器 FETCH 表頭 literal 的**單一可信編碼器**——``FakeIMAPConn`` 與 ``imap_server.ImapServer``
+    共用此函式（消除 P2 SR C3 點名的重複實作/漂移）。
+    """
+    try:
+        value.encode("ascii")
+        return value
+    except UnicodeEncodeError:
+        return "=?UTF-8?B?" + base64.b64encode(value.encode("utf-8")).decode("ascii") + "?="
+
+
+def _render_header_literal(m: "SimMessage", section: str) -> bytes:
+    """產生 ``BODY[HEADER.FIELDS (...)]`` 的 literal：依索取欄位輸出、結尾空行（單一可信來源）。
+
+    非 ASCII 值以 RFC 2047 encoded-word 編碼（真實郵件即如此存放，非裸 UTF-8），確保產品端解碼
+    路徑 ``_decode`` 被真實位元組流驅動；空值欄位（如空主旨）略過不輸出。
+    """
+    fm = re.search(r"HEADER\.FIELDS\s*\(([^)]*)\)", section, re.IGNORECASE)
+    names = fm.group(1).split() if fm else list(m.fields.keys())
+    lines = []
+    for raw in names:
+        key = raw.upper()
+        if key in m.fields and m.fields[key]:
+            title = _HEADER_TITLE.get(key, raw)
+            lines.append(f"{title}: {_encode_header_value(m.fields[key])}")
+    return ("\r\n".join(lines) + "\r\n\r\n").encode("utf-8")
+
+
 class FakeIMAPConn:
     """模擬 ``imaplib.IMAP4_SSL`` 之介面（僅 OutlookIMAPClient 用到的子集，但回應忠實）。
 
@@ -368,29 +398,13 @@ class FakeIMAPConn:
         return ("OK", out)
 
     def _render_header(self, m: SimMessage, section: str) -> bytes:
-        """產生 BODY[HEADER.FIELDS (...)] 的 literal：依索取欄位輸出，結尾空行。
-
-        非 ASCII 值以 RFC 2047 encoded-word 編碼（真實郵件即如此存放，非裸 UTF-8），
-        確保解碼路徑 ``_decode`` 被真實位元組流驅動。
-        """
-        fm = re.search(r"HEADER\.FIELDS\s*\(([^)]*)\)", section, re.IGNORECASE)
-        names = fm.group(1).split() if fm else list(m.fields.keys())
-        lines = []
-        for raw in names:
-            key = raw.upper()
-            if key in m.fields and m.fields[key]:
-                title = _HEADER_TITLE.get(key, raw)
-                lines.append(f"{title}: {self._encode_value(m.fields[key])}")
-        return ("\r\n".join(lines) + "\r\n\r\n").encode("utf-8")
+        """產生 BODY[HEADER.FIELDS (...)] 的 literal（委派模組級單一可信來源 _render_header_literal）。"""
+        return _render_header_literal(m, section)
 
     @staticmethod
     def _encode_value(value: str) -> str:
-        """ASCII 直接輸出；含非 ASCII → RFC 2047 `=?UTF-8?B?...?=`（如真實郵件表頭）。"""
-        try:
-            value.encode("ascii")
-            return value
-        except UnicodeEncodeError:
-            return "=?UTF-8?B?" + base64.b64encode(value.encode("utf-8")).decode("ascii") + "?="
+        """相容保留：委派模組級 _encode_header_value（單一可信來源）。"""
+        return _encode_header_value(value)
 
     # ---------- UID MOVE / COPY / STORE / EXPUNGE ----------
     def _find(self, mailbox: str, uid: int) -> Optional[SimMessage]:
