@@ -106,6 +106,29 @@ def test_engine_fetch_wire_matches_real_imaplib():
     assert real == fake.uid("fetch", "10", _ITEMS)
 
 
+def test_engine_fetch_wire_matches_real_imaplib_for_tricky_subjects():
+    # SR 條件：把「危險母版郵件」(CJK / emoji / 空主旨 / 超長主旨) 的 FETCH wire 餵進真 imaplib，
+    # 與 FakeIMAPConn 對同郵件的解析逐位元組相同 → literal 位元組數路徑在 *wire 層* 被釘死
+    # （非只在領域層）。多位元組 UTF-8 encoded-word 的 {N} 長度最易出錯，於此正面對拍。
+    tricky_uids = (INBOX_CJK_UID, INBOX_EMOJI_UID, INBOX_EMPTY_SUBJECT_UID, INBOX_LONG_SUBJECT_UID)
+
+    def _tricky():  # 每次取一份獨立的母版郵件物件
+        return [m for m in master_mailboxes()["INBOX"] if m.uid in tricky_uids]
+
+    server = ImapServer({"INBOX": _tricky()})
+    server.feed(b"a2 AUTHENTICATE XOAUTH2")
+    server.feed(base64.b64encode(b"x"))
+    server.feed(b"a3 EXAMINE INBOX")
+    uidset = ",".join(str(u) for u in tricky_uids)
+    resp = server.feed(f"a4 UID FETCH {uidset} ".encode() + _ITEMS.encode())
+    wire = resp.split(b"a4 OK")[0]
+
+    real = probe.real_uid_fetch(wire, uidset, _ITEMS)
+    fake = FakeIMAPConn({"INBOX": _tricky()})
+    fake.select("INBOX", readonly=True)
+    assert real == fake.uid("fetch", uidset, _ITEMS)
+
+
 def test_engine_search_wire_matches_real_imaplib():
     server = ImapServer({"INBOX": [message(10), message(11), message(12)]})
     server.feed(b"a2 AUTHENTICATE XOAUTH2")

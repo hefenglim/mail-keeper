@@ -30,7 +30,7 @@ from __future__ import annotations
 import base64
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 # 沿用既有、已對拍真 imaplib 驗證過的資料模型與編碼助手（單一可信來源）。
