@@ -491,9 +491,10 @@ class ImapServer:
             self._record(tag, "UID STORE", (uid_s.decode(), op, flags_str), self._selected, (), "NO", None)
             return self._tagged(tag, "NO", "No matching message")
         parsed = {f if f.startswith("\\") else "\\" + f for f in re.findall(r"\\?\w+", flags_str.strip("()"))}
-        if op.startswith("+"):
+        op_u = op.upper()  # 與 FakeIMAPConn 一致（消除 P1 SR C3 點名的大小寫漂移）
+        if op_u.startswith("+"):
             m.flags |= parsed
-        elif op.startswith("-"):
+        elif op_u.startswith("-"):
             m.flags -= parsed
         else:
             m.flags = parsed

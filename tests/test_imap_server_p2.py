@@ -79,12 +79,31 @@ def test_move_fallback_copy_store_uidexpunge_spares_foreign_deleted(monkeypatch)
 
 def test_move_fallback_copy_fails_keeps_source(monkeypatch):
     server = _server(supports_move=False)
+    client = connected_client(monkeypatch, server)
     with pytest.raises(BackendError):
-        connected_client(monkeypatch, server).move(str(INBOX_NEWSLETTER_UID), "NoSuchFolder", "INBOX")
+        client.move(str(INBOX_NEWSLETTER_UID), "NoSuchFolder", "INBOX")
     # COPY 失敗（目標夾不存在）→ 絕不標刪/EXPUNGE，來源郵件須留存
     assert INBOX_NEWSLETTER_UID in {u for u, _ in server.snapshot()["INBOX"]}
     assert server.command_count("UID STORE") == 0
     assert server.command_count("UID EXPUNGE") == 0 and server.command_count("EXPUNGE") == 0
+    # byte 層保真（SR C2）：真 imaplib 解析了 NO 回應的 [TRYCREATE] 響應碼
+    assert client._imap.untagged_responses.get("TRYCREATE") is not None
+
+
+@pytest.mark.xfail(
+    reason="已知產品限制（SR C1）：fallback move 於 COPY 成功後、UID EXPUNGE 前斷線，重試會重做 "
+    "COPY → 目標夾出現重複複本（非資料遺失，來源仍正確移除）。正解需重試前偵測既有複本或改用更原子序列；"
+    "見 roadmap-backlog。本測試以期望（修好後）行為 xfail 記錄此限制，P3 遷移 fallback 路徑前應先修。",
+    strict=False,
+)
+def test_fallback_move_idempotency_across_copy_known_limitation(monkeypatch):
+    server = _server(supports_move=False)
+    server.arm_expiry(before_op="EXPUNGE", nth=1, mode="eof")  # COPY 成功、UID EXPUNGE 前斷線
+    _no_sleep(monkeypatch)
+    client = connected_client(monkeypatch, server, token_provider=lambda: "tok")
+    client.move(str(INBOX_NEWSLETTER_UID), "Archive", "INBOX")
+    assert INBOX_NEWSLETTER_UID not in {m.uid for m in server.mailboxes["INBOX"]}  # 來源確實移除（非遺失）
+    assert len(server.mailboxes["Archive"]) == 1  # 期望恰一封；現況為 2（重試重複 COPY）→ 暫 xfail
 
 
 def test_ensure_folder_creates_then_idempotent(monkeypatch):
@@ -178,6 +197,15 @@ def test_destructive_response_wire_parses_through_real_imaplib():
     m2.state = "SELECTED"
     assert m2.uid("EXPUNGE", str(INBOX_NEWSLETTER_UID))[0] == "OK"
     assert m2.untagged_responses.get("EXPUNGE") == [b"1"]  # 真 imaplib 解析出 * 1 EXPUNGE
+
+
+def test_move_copyuid_response_code_parsed_by_real_imaplib(monkeypatch):
+    # byte 層保真（SR C2）：真 imaplib 解析了 MOVE tagged 回應的 [COPYUID ...] 響應碼（非僅 typ==OK）
+    server = _server()
+    client = connected_client(monkeypatch, server)
+    client.move(str(INBOX_NEWSLETTER_UID), "Archive", "INBOX")
+    copyuid = client._imap.untagged_responses.get("COPYUID")
+    assert copyuid and str(INBOX_NEWSLETTER_UID).encode() in copyuid[0]
 
 
 def test_uid_expunge_only_targets_given_deleted_uid(monkeypatch):
