@@ -2,13 +2,21 @@
 from __future__ import annotations
 
 from imap_dataset import (
+    INBOX_CJK_UID,
     INBOX_NEWSLETTER_UID,
     INBOX_SEEN_UID,
     INBOX_USER_DELETED_UID,
     fresh_sim,
     master_mailboxes,
 )
-from imap_sim import DELETED, SEEN, client_on
+from imap_sim import DELETED, SEEN, client_on, connected_client
+
+from mailkeeper import classifier, cli
+from mailkeeper.csv_io import ClassificationRow
+
+
+def _rows(*specs):
+    return [ClassificationRow(*s) for s in specs]
 
 
 # ── 母版完整性 ──────────────────────────────────────────────────────────────
@@ -89,3 +97,61 @@ def test_two_layer_fallback_preserves_user_deleted():
     assert INBOX_USER_DELETED_UID in after_inbox
     assert before_inbox - after_inbox == {INBOX_NEWSLETTER_UID}
     assert len(sim.mailboxes["Archive"]) == 1
+
+
+# ── US1：token 中途過期 → 分類仍全完成（雙層）──────────────────────────────
+
+def test_classify_completes_through_token_expiry(monkeypatch):
+    sim = fresh_sim()
+    client = connected_client(monkeypatch, sim, token_provider=lambda: "tok")
+    sim.arm_expiry(before_op="move", nth=2)  # 第 2 次搬移時 token 過期
+    rows = _rows(
+        (str(INBOX_NEWSLETTER_UID), "INBOX", "Archive"),
+        (str(INBOX_CJK_UID), "INBOX", "Archive"),
+        ("107", "INBOX", "Archive"),
+    )
+    cache = classifier.ClassifyCache()
+    items = classifier.build_report(client, rows, cache=cache)
+    results = classifier.execute(client, items, cache=cache)
+    # 第一層：全部成功（透明恢復），日誌有重連（≥2 次認證）
+    assert len(results) == 3 and all(r.ok for r in results)
+    assert len([c for c in sim.log if c.name == "authenticate"]) >= 2
+    # 第二層：3 封都進 Archive，他人 \Deleted(106) 未波及
+    assert len(sim.mailboxes["Archive"]) == 3
+    assert (INBOX_USER_DELETED_UID, frozenset({DELETED})) in sim.snapshot()["INBOX"]
+
+
+# ── US2：效率（用指令日誌抓冗餘）—— 同一流程整夾只讀一次、list 只一次 ──────
+
+def test_classify_reads_each_source_folder_once_via_log():
+    sim = fresh_sim()
+    client = client_on(sim)
+    cache = classifier.ClassifyCache()
+    rows = _rows(
+        (str(INBOX_NEWSLETTER_UID), "INBOX", "Archive"),
+        (str(INBOX_CJK_UID), "INBOX", "Archive"),
+    )
+    items = classifier.build_report(client, rows, cache=cache)
+    classifier.execute(client, items, cache=cache)
+    # 指令日誌效率斷言：INBOX 整夾標頭 fetch 只一次（報告讀、執行重用、不二次掃描）
+    fetches = [c for c in sim.log if c.name == "uid" and c.args[0] == "fetch"]
+    assert len(fetches) == 1
+    # 資料夾清單只讀一次（report/new_folders/execute 共用快取）
+    assert len(sim.commands("list")) == 1
+
+
+# ── US1/FR-011：dry-run 不被繞過（即使底層會重連）──────────────────────────
+
+def test_dry_run_moves_nothing_even_with_reconnect(monkeypatch, tmp_path):
+    sim = fresh_sim()
+    client = connected_client(monkeypatch, sim, token_provider=lambda: "tok")
+    before = sim.snapshot()
+    p = tmp_path / "w.csv"
+    p.write_text(
+        f"uid,current_folder,target_folder\n{INBOX_NEWSLETTER_UID},INBOX,Archive\n",
+        encoding="utf-8-sig",
+    )
+    cli.classify(client, str(p), run=False, interactive=False)  # 未確認 → 不搬
+    assert sim.snapshot() == before  # 狀態完全不變（dry-run）
+    destructive = [c for c in sim.log if c.name == "uid" and c.args[0] in ("move", "copy", "expunge")]
+    assert not destructive and not sim.commands("expunge")  # 無任何破壞性動作

@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import imaplib
+
 import pytest
 
 from imap_dataset import (
@@ -16,9 +18,9 @@ from imap_dataset import (
     INBOX_USER_DELETED_UID,
     fresh_sim,
 )
-from imap_sim import FLAGGED, SEEN, client_on, install
+from imap_sim import FLAGGED, SEEN, client_on, connected_client, install
 
-from mailkeeper.imap_client import BackendError, OutlookIMAPClient
+from mailkeeper.imap_client import BackendError, OutlookIMAPClient, ReauthRequired
 
 
 # --- list_headers：契約 + 動作日誌（本可在 0.5.0 抓到 UID 全空 bug）---
@@ -128,6 +130,82 @@ def test_flag_sets_flagged():
     client_on(sim).flag(str(INBOX_NEWSLETTER_UID), "INBOX")
     msg = next(m for m in sim.mailboxes["INBOX"] if m.uid == INBOX_NEWSLETTER_UID)
     assert FLAGGED in msg.flags
+
+
+# --- R7：透明重連 / 乾淨停止 / 狀態可見（皆走模擬器）---
+
+def test_move_transparently_reconnects_on_token_expiry(monkeypatch):
+    sim = fresh_sim()
+    sim.arm_expiry(before_op="move", nth=1)  # 第一次 move 即 token 過期
+    provider_calls: list = []
+    client = connected_client(
+        monkeypatch, sim, token_provider=lambda: (provider_calls.append(1) or "tok")
+    )
+    client.move(str(INBOX_NEWSLETTER_UID), "Archive", "INBOX")
+    assert INBOX_NEWSLETTER_UID not in {m.uid for m in sim.mailboxes["INBOX"]}  # 透明重連後搬成功
+    assert len([c for c in sim.log if c.name == "authenticate"]) >= 2  # 初次 + 重連各一次認證
+    assert len(provider_calls) >= 1  # token provider 於重連時被呼叫（靜默續期；初次連線用既有 token）
+
+
+def test_move_clean_stops_when_silent_renew_impossible(monkeypatch):
+    sim = fresh_sim()
+    sim.arm_expiry(before_op="move", nth=1)
+
+    def provider():  # 重連時靜默續期不可行（初次連線用建構時的既有 token，不呼叫 provider）
+        raise ReauthRequired("re-login")
+
+    client = connected_client(monkeypatch, sim, token_provider=provider)
+    with pytest.raises(ReauthRequired):
+        client.move(str(INBOX_NEWSLETTER_UID), "Archive", "INBOX")
+    assert INBOX_NEWSLETTER_UID in {m.uid for m in sim.mailboxes["INBOX"]}  # 未搬走（乾淨停止）
+
+
+def test_reconnect_emits_secret_free_status(monkeypatch):
+    sim = fresh_sim()
+    sim.arm_expiry(before_op="move", nth=1)
+    statuses: list[str] = []
+    client = connected_client(
+        monkeypatch, sim, token_provider=lambda: "super-secret-token", on_status=statuses.append
+    )
+    client.move(str(INBOX_NEWSLETTER_UID), "Archive", "INBOX")
+    assert any("重新連線" in s for s in statuses)          # 恢復期間有狀態（FR-009）
+    assert all("super-secret-token" not in s for s in statuses)  # 狀態不含 token（FR-012）
+
+
+def test_list_headers_reconnects_and_refetches_whole(monkeypatch):
+    # 匯出整批重抓：標頭下載中途 fetch 失效 → 重連後整批重抓，結果完整、UID 全非空
+    sim = fresh_sim()
+    sim.arm_expiry(before_op="fetch", nth=1)
+    client = connected_client(monkeypatch, sim, token_provider=lambda: "tok")
+    headers = client.list_headers("INBOX")
+    assert len(headers) == 8 and all(h.uid for h in headers)
+    assert len([c for c in sim.log if c.name == "authenticate"]) >= 2
+
+
+# --- US3：退避有界且封頂 / 重連用盡即外拋 ---
+
+def test_backoff_is_bounded_and_capped(monkeypatch):
+    sim = fresh_sim()
+    client = connected_client(
+        monkeypatch, sim, token_provider=lambda: "tok",
+        backoff_base_seconds=1.0, backoff_cap_seconds=4.0, max_reconnect_attempts=5,
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr("mailkeeper.imap_client.time.sleep", lambda s: sleeps.append(s))
+    sim.arm_expiry(before_op="move", nth=1)  # 一次過期 → 一次重連
+    client.move(str(INBOX_NEWSLETTER_UID), "Archive", "INBOX")
+    assert sleeps and all(s <= 4.0 for s in sleeps)  # 有退避且不超過封頂
+
+
+def test_reconnect_exhausted_raises(monkeypatch):
+    sim = fresh_sim()
+    client = connected_client(
+        monkeypatch, sim, token_provider=lambda: "tok", max_reconnect_attempts=2
+    )
+    monkeypatch.setattr("mailkeeper.imap_client.time.sleep", lambda s: None)
+    sim.arm_expiry(before_op="move", nth=1, persist=True)  # 失效後不恢復（伺服器持續不可用）
+    with pytest.raises(imaplib.IMAP4.abort):
+        client.move(str(INBOX_NEWSLETTER_UID), "Archive", "INBOX")  # 重連 2 次後放棄、外拋
 
 
 # --- connect()：XOAUTH2 認證字串格式（FakeIMAPConn + install）---

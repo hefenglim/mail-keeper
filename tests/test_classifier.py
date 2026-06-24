@@ -132,6 +132,16 @@ def test_execute_reports_progress(folder_backend):
     assert seen == [(1, 2), (2, 2)]  # 2 候選 → 逐封回報 done/total
 
 
+def test_execute_threshold_configurable(make_backend, monkeypatch):
+    # US3：連續失敗門檻可由參數調整（cli 由 config 帶入）。預設 3，這裡設 2 → 停在第 2 次。
+    headers = [MailHeader(str(i), "S", "a@x", "d") for i in range(1, 6)]
+    backend = make_backend(folders={"INBOX": headers, "Work": []})
+    items = classifier.build_report(backend, _rows(*[(str(i), "INBOX", "Work") for i in range(1, 6)]))
+    monkeypatch.setattr(backend, "move", lambda *a, **k: (_ for _ in ()).throw(OSError("x")))
+    results = classifier.execute(backend, items, max_consecutive_failures=2)
+    assert len(results) == 2  # 門檻=2 → 停在第 2 次連續失敗
+
+
 def test_execute_stale_uid_reported_as_failure(folder_backend):
     # 同次兩列都搬 uid 10；第一列搬走後第二列來源已無 10 → 失敗、不崩潰
     rows = _rows(("10", "INBOX", "Work"), ("10", "INBOX", "Archive"))

@@ -13,9 +13,12 @@ import base64
 import email
 import imaplib
 import re
+import socket
+import ssl
+import time
 from dataclasses import dataclass
 from email.header import decode_header
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, TypeVar
 
 import charset_normalizer
 
@@ -24,8 +27,22 @@ from . import config
 # 後端中立的錯誤別名：讓上層 (cli) 不必直接 import imaplib，維持 seam 純度。
 BackendError = imaplib.IMAP4.error
 
+
+class ReauthRequired(Exception):
+    """需使用者重新登入的終結訊號（非暫時性、不重試）。
+
+    後端中立：定義在此而非 auth.py，使 `imap_client` 不必 import MSAL（憲法 Principle I）；
+    `auth` 與 `cli` 反向 import 本類別。訊息**絕不**含 token/secret（Principle IV）。
+    """
+
+
 _FETCH_BATCH = 50  # 每批 UID FETCH 的封數：減少往返、並讓進度於下載期間分批前進
 _UID_RE = re.compile(rb"UID (\d+)")
+
+# 視為「session 失效/連線中斷、需重連」的錯誤訊息標記（research R4；對照真實 Outlook log）。
+_SESSION_LOST_MARKERS = ("AccessTokenExpired", "Session invalidated", "AUTHENTICATIONFAILED")
+
+_T = TypeVar("_T")
 
 
 def _chunked(seq: list[Any], size: int) -> Iterator[list[Any]]:
@@ -140,6 +157,13 @@ class OutlookIMAPClient:
         host: str | None = None,
         port: int | None = None,
         timeout: float | None = None,
+        token_provider: Callable[[], str] | None = None,
+        on_status: Callable[[str], None] | None = None,
+        max_consecutive_failures: int = config.MAX_CONSECUTIVE_FAILURES,
+        max_reconnect_attempts: int = config.MAX_RECONNECT_ATTEMPTS,
+        max_retries_per_op: int = config.MAX_RETRIES_PER_OP,
+        backoff_base_seconds: float = config.BACKOFF_BASE_SECONDS,
+        backoff_cap_seconds: float = config.BACKOFF_CAP_SECONDS,
     ) -> None:
         self._email = email_account
         self._token = access_token
@@ -147,13 +171,77 @@ class OutlookIMAPClient:
         self._port = port if port is not None else config.IMAP_PORT
         self._timeout = timeout if timeout is not None else config.IMAP_TIMEOUT
         self._imap: imaplib.IMAP4_SSL | None = None
+        # R7 韌性：注入式 token 續期 / 狀態回呼 / 重連與重試上限（後端中立，維持 seam 純度）。
+        self._token_provider = token_provider
+        self._on_status = on_status
+        # classifier 讀此屬性決定連續失敗門檻（後端中立、duck-typed；FakeBackend 無此屬性 → 用預設）。
+        self.max_consecutive_failures = max_consecutive_failures
+        self._max_reconnect_attempts = max(0, max_reconnect_attempts)
+        self._max_retries_per_op = max(0, max_retries_per_op)
+        self._backoff_base = max(0.0, backoff_base_seconds)
+        self._backoff_cap = max(self._backoff_base, backoff_cap_seconds)
 
     # ---------- 連線管理 ----------
     def connect(self) -> None:
+        # 用目前持有的 token 連線（初次＝建構時取得的有效 token；重連前由 _reconnect 先靜默續期更新）。
         self._imap = imaplib.IMAP4_SSL(self._host, self._port, timeout=self._timeout)
         # XOAUTH2 認證字串格式 (注意是 \x01 控制字元，不是空白)
         auth_string = f"user={self._email}\x01auth=Bearer {self._token}\x01\x01"
         self._imap.authenticate("XOAUTH2", lambda _: auth_string.encode())
+
+    # ---------- R7：透明重連 / 有界重試 ----------
+    def _status(self, msg: str) -> None:
+        if self._on_status is not None:
+            try:
+                self._on_status(msg)  # 後端中立；訊息不含 secret
+            except Exception:
+                pass  # 狀態提示永不影響主流程
+
+    @staticmethod
+    def _is_session_lost(exc: BaseException) -> bool:
+        """判斷是否為「session 失效/連線中斷、應重連」（vs 單封資料層失敗）。"""
+        if isinstance(exc, (imaplib.IMAP4.abort, OSError, ssl.SSLError, socket.error)):
+            return True
+        if isinstance(exc, imaplib.IMAP4.error):
+            return any(m in str(exc) for m in _SESSION_LOST_MARKERS)
+        return False
+
+    def _reconnect(self) -> None:
+        """重建連線：登出舊連線（best-effort）→ 靜默續期更新 token → connect() 重新認證。"""
+        try:
+            if self._imap is not None:
+                self._imap.logout()
+        except Exception:
+            pass
+        self._imap = None
+        if self._token_provider is not None:
+            self._token = self._token_provider()  # 僅靜默續期；無法續期 → ReauthRequired（往外傳、不重試）
+        self.connect()
+
+    def _with_reconnect(self, op: Callable[[], _T]) -> _T:
+        """執行 op；遇 session 失效/連線中斷 → 靜默續期 + 重連 + 有界退避重試。
+
+        `ReauthRequired` 直接外拋（不重試）；非連線類錯誤照常外拋（維持單列處理/安全 fallback）。
+        """
+        attempts = 0
+        while True:
+            try:
+                return op()
+            except ReauthRequired:
+                raise  # 需重新登入 → 終結，由 cli 乾淨停止
+            except Exception as exc:
+                if not self._is_session_lost(exc) or attempts >= self._max_reconnect_attempts:
+                    raise
+                attempts += 1
+                self._status(f"連線中斷，重新連線中…（第 {attempts}/{self._max_reconnect_attempts} 次）")
+                self._sleep_backoff(attempts)
+                self._reconnect()
+                self._status("已重新連線，繼續處理。")
+
+    def _sleep_backoff(self, attempt: int) -> None:
+        delay = min(self._backoff_base * (2 ** (attempt - 1)), self._backoff_cap)
+        if delay > 0:
+            time.sleep(delay)
 
     def close(self) -> None:
         if self._imap is not None:
@@ -177,7 +265,10 @@ class OutlookIMAPClient:
 
     # ---------- 讀取 ----------
     def list_folders(self) -> list[str]:
-        """列舉信箱所有資料夾名稱。"""
+        """列舉信箱所有資料夾名稱（連線中斷會透明重連重試）。"""
+        return self._with_reconnect(self._list_folders_impl)
+
+    def _list_folders_impl(self) -> list[str]:
         typ, data = self._conn.list()
         folders: list[str] = []
         if typ == "OK" and data:
@@ -193,7 +284,12 @@ class OutlookIMAPClient:
         self, folder: str = "INBOX", *, on_progress: Callable[[int, int], None] | None = None
     ) -> list[MailHeader]:
         """讀取指定資料夾所有郵件的標題 (只抓 header)。以分批 UID FETCH 取得，每批回報
-        進度 `on_progress(done, total)`，使大量郵件下載期間可見進展、不像當機。"""
+        進度 `on_progress(done, total)`。連線中斷會透明重連並**整批重抓**（唯讀、重跑安全）。"""
+        return self._with_reconnect(lambda: self._list_headers_impl(folder, on_progress=on_progress))
+
+    def _list_headers_impl(
+        self, folder: str = "INBOX", *, on_progress: Callable[[int, int], None] | None = None
+    ) -> list[MailHeader]:
         self._conn.select(folder, readonly=True)
         typ, data = self._conn.uid("search", None, "ALL")  # type: ignore[arg-type]  # IMAP SEARCH 允許 charset=None
         if typ != "OK" or not data or data[0] is None:
@@ -253,12 +349,16 @@ class OutlookIMAPClient:
 
     def move(self, uid: str, dest_folder: str, mailbox: str = "INBOX") -> None:
         """將郵件搬到指定資料夾。優先用 UID MOVE；伺服器不支援時退回 copy→標刪→UID EXPUNGE。
+        連線中斷會透明重連並重試本次搬移（搬移自含 select，重連後從頭重做、冪等安全）。
 
         安全鐵則（破壞性動作，避免資料遺失）：
           1. **COPY 成功才標刪**：copy 未成功就絕不 `\\Deleted`+expunge（沒有複本就刪 = 永久遺失）。
           2. **以 UID EXPUNGE 限定該封**（RFC 4315 UIDPLUS），避免整夾 EXPUNGE 波及其他
              已被標 `\\Deleted` 的郵件；僅在伺服器不支援 UIDPLUS 時才退回整夾 EXPUNGE。
         """
+        self._with_reconnect(lambda: self._move_impl(uid, dest_folder, mailbox))
+
+    def _move_impl(self, uid: str, dest_folder: str, mailbox: str) -> None:
         self._conn.select(mailbox)
         typ, _ = self._conn.uid("move", uid, dest_folder)
         if typ == "OK":

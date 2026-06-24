@@ -30,6 +30,7 @@ IMAP 指令留下動作日誌（command action log），讓驗證程序能查核
 from __future__ import annotations
 
 import base64
+import imaplib
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -173,6 +174,34 @@ class FakeIMAPConn:
         self._readonly = False
         self.log: list[ImapCommand] = []
         self.auth_string: Optional[bytes] = None  # connect() 送出的 XOAUTH2 認證字串
+        # ── token 過期 / session 失效模擬（擬真 Outlook 的「中途過期 → EOF 連環」）──
+        self._session_valid = True
+        self._expire_arm: Optional[tuple[str, int]] = None  # (op_kind, nth) 一次性
+        self._op_counts: dict[str, int] = {}
+        self._persist_invalid = False  # True：失效後即使重新認證也不恢復（伺服器持續不可用）
+
+    # ---------- 失效模擬（token 過期 / 連線中斷）----------
+    def arm_expiry(self, *, before_op: str, nth: int = 1, persist: bool = False) -> None:
+        """安排「第 nth 次 ``before_op`` 操作時 session 失效」（一次性）。
+
+        失效後所有指令擲 ``imaplib.IMAP4.abort``（含 AccessTokenExpired 標記，擬真 Outlook
+        token 過期 → session 作廢 → 後續 EOF 連環）；直到再次 ``authenticate`` 才恢復。
+        ``persist=True``：失效後即使重新認證也不恢復（模擬伺服器持續不可用 → 重連用盡仍失敗）。
+        """
+        self._expire_arm = (before_op.upper(), nth)
+        self._persist_invalid = persist
+
+    def _arm_tick(self, op_kind: str) -> None:
+        self._op_counts[op_kind] = self._op_counts.get(op_kind, 0) + 1
+        if self._expire_arm and op_kind == self._expire_arm[0] and self._op_counts[op_kind] == self._expire_arm[1]:
+            self._session_valid = False
+            self._expire_arm = None  # 一次性
+
+    def _check_valid(self) -> None:
+        if not self._session_valid:
+            raise imaplib.IMAP4.abort(
+                "command: SELECT => Session invalidated - AccessTokenExpired"
+            )
 
     # ---------- 第二層驗證：資料狀態快照 ----------
     def snapshot(self) -> dict[str, list[tuple[int, frozenset]]]:
@@ -202,6 +231,8 @@ class FakeIMAPConn:
             self.auth_string = authobject(b"")
         except Exception:
             self.auth_string = None
+        if not self._persist_invalid:
+            self._session_valid = True  # 成功（重新）認證 → session 恢復（persist 模式則維持失效）
         return ("OK", [b"AUTHENTICATE completed"])
 
     def logout(self) -> tuple:
@@ -212,6 +243,7 @@ class FakeIMAPConn:
     # ---------- 資料夾 ----------
     def list(self, directory: str = '""', pattern: str = "*") -> tuple:
         self.log.append(ImapCommand("list", (directory, pattern)))
+        self._check_valid()
         # 與真 imaplib 一致：每行 b'(\\HasNoChildren) "<sep>" "<mutf7-name>"'（已剝除 '* LIST '）。
         lines = [
             f'(\\HasNoChildren) "{self._sep}" "{_encode_mutf7(name)}"'.encode()
@@ -221,6 +253,7 @@ class FakeIMAPConn:
 
     def create(self, mailbox: str) -> tuple:
         self.log.append(ImapCommand("create", (mailbox,)))
+        self._check_valid()
         name = _unquote(mailbox)
         if name in self.mailboxes:
             return ("NO", [b"[ALREADYEXISTS] Mailbox already exists"])
@@ -230,6 +263,7 @@ class FakeIMAPConn:
 
     def select(self, mailbox: str = "INBOX", readonly: bool = False) -> tuple:
         self.log.append(ImapCommand("select", (mailbox,), {"readonly": readonly}))
+        self._check_valid()
         name = _unquote(mailbox)
         if name not in self.mailboxes:
             return ("NO", [f"[NONEXISTENT] Mailbox doesn't exist: {name}".encode()])
@@ -240,6 +274,7 @@ class FakeIMAPConn:
     # ---------- 整夾 EXPUNGE ----------
     def expunge(self) -> tuple:
         self.log.append(ImapCommand("expunge"))
+        self._check_valid()
         msgs = self._sel_msgs()
         return self._do_expunge([m.uid for m in msgs if DELETED in m.flags])
 
@@ -247,6 +282,8 @@ class FakeIMAPConn:
     def uid(self, command: str, *args: Any) -> tuple:
         self.log.append(ImapCommand("uid", (command, *args)))
         cmd = command.upper()
+        self._arm_tick(cmd)   # 可能在此引發 session 失效（第 nth 次該操作）
+        self._check_valid()
         if cmd == "SEARCH":
             return self._uid_search(args)
         if cmd == "FETCH":
@@ -435,8 +472,8 @@ def client_on(sim: FakeIMAPConn) -> Any:
     """
     from mailkeeper.imap_client import OutlookIMAPClient
 
-    c = OutlookIMAPClient.__new__(OutlookIMAPClient)
-    c._imap = sim  # `_conn` property 讀的就是 `_imap`
+    c = OutlookIMAPClient("user@x.com", "tok")  # 跑 __init__ 設好韌性屬性
+    c._imap = sim  # 直接掛上模擬器（不經 connect）；`_conn` property 讀的就是 `_imap`
     return c
 
 
@@ -459,3 +496,17 @@ def install(monkeypatch: Any, sim: FakeIMAPConn, *, capture: Optional[dict] = No
 
     monkeypatch.setattr("mailkeeper.imap_client.imaplib.IMAP4_SSL", factory)
     return cap
+
+
+def connected_client(monkeypatch: Any, sim: FakeIMAPConn, **client_kw: Any) -> Any:
+    """install() + 建構真實 ``OutlookIMAPClient`` + connect()，回傳已連線 client。
+
+    用於需要「重連」的測試：`_with_reconnect` 會重建 `IMAP4_SSL`，install 的工廠讓它取回**同一個**
+    模擬器（於是 `authenticate` 再次被呼叫、session 恢復）。`client_kw` 透傳如 `token_provider`/`on_status`。
+    """
+    from mailkeeper.imap_client import OutlookIMAPClient
+
+    install(monkeypatch, sim)
+    c = OutlookIMAPClient("user@x.com", "tok", **client_kw)
+    c.connect()
+    return c

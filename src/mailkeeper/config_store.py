@@ -40,6 +40,12 @@ class Configuration:
     authority: str
     scopes: list[str]
     token_cache_path: str
+    # R7 韌性設定（可選；無效退安全預設、不崩潰）。具預設以維持直接建構的相容性。
+    max_consecutive_failures: int = config.MAX_CONSECUTIVE_FAILURES
+    max_reconnect_attempts: int = config.MAX_RECONNECT_ATTEMPTS
+    max_retries_per_op: int = config.MAX_RETRIES_PER_OP
+    backoff_base_seconds: float = config.BACKOFF_BASE_SECONDS
+    backoff_cap_seconds: float = config.BACKOFF_CAP_SECONDS
 
 
 def config_path(cwd: Path | None = None) -> Path:
@@ -103,6 +109,24 @@ def _as_float(value: Any, default: float, field: str, path: Path) -> float:
         raise ConfigError(f"設定檔 {path} 的 '{field}' 必須是數字。") from None
 
 
+def _as_positive_int(value: Any, default: int) -> int:
+    """正整數否則退預設（韌性設定：無效永不崩潰，FR-008）。"""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return n if n > 0 else default
+
+
+def _as_positive_float(value: Any, default: float) -> float:
+    """正數否則退預設。"""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return default
+    return f if f > 0 else default
+
+
 def load(cwd: Path | None = None) -> Configuration:
     """讀取並驗證 config.json。缺檔→ConfigNotFound；未填/壞檔→ConfigError。"""
     path = config_path(cwd)
@@ -125,6 +149,12 @@ def load(cwd: Path | None = None) -> Configuration:
     imap_port = _as_int(data.get("imap_port"), config.IMAP_PORT, "imap_port", path)
     timeout = _as_float(data.get("timeout"), config.IMAP_TIMEOUT, "timeout", path)
 
+    # R7 韌性設定：無效/缺漏一律退安全預設（永不崩潰）。封頂須 ≥ base。
+    backoff_base = _as_positive_float(data.get("backoff_base_seconds"), config.BACKOFF_BASE_SECONDS)
+    backoff_cap = _as_positive_float(data.get("backoff_cap_seconds"), config.BACKOFF_CAP_SECONDS)
+    if backoff_cap < backoff_base:
+        backoff_cap = config.BACKOFF_CAP_SECONDS if config.BACKOFF_CAP_SECONDS >= backoff_base else backoff_base
+
     return Configuration(
         client_id=client_id,
         email=email,
@@ -134,6 +164,17 @@ def load(cwd: Path | None = None) -> Configuration:
         authority=config.AUTHORITY,
         scopes=list(config.SCOPES),
         token_cache_path=config.TOKEN_CACHE_PATH,
+        max_consecutive_failures=_as_positive_int(
+            data.get("max_consecutive_failures"), config.MAX_CONSECUTIVE_FAILURES
+        ),
+        max_reconnect_attempts=_as_positive_int(
+            data.get("max_reconnect_attempts"), config.MAX_RECONNECT_ATTEMPTS
+        ),
+        max_retries_per_op=_as_positive_int(
+            data.get("max_retries_per_op"), config.MAX_RETRIES_PER_OP
+        ),
+        backoff_base_seconds=backoff_base,
+        backoff_cap_seconds=backoff_cap,
     )
 
 
