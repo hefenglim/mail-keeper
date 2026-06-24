@@ -30,3 +30,6 @@ htmlcov/
 
 # 建置時烙印的 build 時間戳（由 scripts/stamp-build.py 產生，不提交）
 src/mailkeeper/_buildinfo.py
+
+# CPython imaplib 參考資料（原始碼 + 文件），不提交
+imaplib/
