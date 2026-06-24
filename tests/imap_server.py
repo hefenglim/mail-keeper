@@ -375,6 +375,11 @@ class ImapServer:
             return self._tagged(tag, "NO", "FETCH failed (simulated)")
         want = set(_parse_uidset(uidset))
         msgs = [m for m in self._sel_msgs() if m.uid in want]
+        # 擬真：非 PEEK 的 BODY[...] 會把抓到的郵件設 \Seen（真實 IMAP 副作用）；產品一律用 .PEEK，
+        # 故產品路徑不受影響——此分支僅在直接驅動引擎送非 PEEK 請求時生效。
+        if not self._readonly and re.search(r"\bBODY\[", items_s):
+            for m in msgs:
+                m.flags.add(SEEN)
         body = self._render_fetch(msgs, items_s)
         self._record(
             tag, "UID FETCH", (uidset.decode("ascii", "replace"), items_s),
@@ -610,8 +615,46 @@ class ImapServer:
             "command_counts": counts,
             "fetches_per_folder": fetches,
             "redundant_full_folder_reads": {mb: n for mb, n in fetches.items() if n > 1},
+            "redundant_selects": self.redundant_selects(),
             "authentications": counts.get("AUTHENTICATE", 0),
             "destructive_ops": destructive,
+        }
+
+    def redundant_selects(self) -> int:
+        """連續對「同一個已選取信箱」重複 SELECT/EXAMINE 的次數（可省的往返——效能浪費）。
+
+        例：分類迴圈中產品對每封 move 前都重 SELECT 來源夾，雖正確但每次都選同一已選夾 →
+        本計數即點出這類可優化的重複（每來源夾批次只需 SELECT 一次）。
+        """
+        cur: Optional[tuple] = None  # (mailbox, response_code) —— 兼顧讀寫模式：模式切換的重選不算浪費
+        waste = 0
+        for op in self.log:
+            if op.command in ("SELECT", "EXAMINE"):
+                key = (op.mailbox, op.response_code)
+                if key == cur:
+                    waste += 1
+                cur = key
+        return waste
+
+    def bottleneck(self) -> dict:
+        """指出最可能的效能瓶頸：最高次數命令 + 可省的重複 SELECT / 整夾重抓（供 loop regression 分析）。"""
+        counts: dict[str, int] = {}
+        for op in self.log:
+            counts[op.command] = counts.get(op.command, 0) + 1
+        top = max(counts.items(), key=lambda kv: kv[1]) if counts else (None, 0)
+        return {
+            "most_frequent_command": top[0],
+            "most_frequent_count": top[1],
+            "redundant_selects": self.redundant_selects(),
+            "redundant_full_folder_reads": {
+                mb: n
+                for mb, n in (
+                    (op.mailbox, sum(1 for o in self.log if o.command == "UID FETCH" and o.mailbox == op.mailbox))
+                    for op in self.log
+                    if op.command == "UID FETCH"
+                )
+                if n > 1
+            },
         }
 
     def dump(self) -> str:

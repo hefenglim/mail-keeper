@@ -99,24 +99,57 @@ def _parse_uidset(spec: Any) -> list[int]:
 _HEADER_TITLE = {"SUBJECT": "Subject", "FROM": "From", "TO": "To", "DATE": "Date"}
 
 
-def _encode_header_value(value: str) -> str:
-    """ASCII 直接輸出；含非 ASCII → RFC 2047 ``=?UTF-8?B?...?=``（如真實郵件表頭）。
+def _encode_word(tok: str) -> str:
+    return "=?UTF-8?B?" + base64.b64encode(tok.encode("utf-8")).decode("ascii") + "?="
 
-    FETCH 表頭 literal 的**單一可信編碼器**——``imap_server.ImapServer`` 經 ``_render_header_literal``
-    使用此函式（消除 P2 SR C3 點名的重複實作/漂移）。
+
+def _encode_header_value(value: str) -> str:
+    """ASCII 直接輸出；含非 ASCII → **逐空白分隔詞** RFC 2047 編碼。
+
+    擬真硬化：真實 MUA 只把含非 ASCII 的「詞」編成 encoded-word，ASCII 詞（如 email 位址）保持
+    原樣——例 ``"王經理 <boss@x.com>"`` → ``"=?UTF-8?B?..?= <boss@x.com>"``（只編顯示名）。
+    FETCH 表頭 literal 的**單一可信編碼器**（``imap_server.ImapServer`` 經 ``_render_header_literal`` 共用）。
     """
     try:
         value.encode("ascii")
-        return value
+        return value  # 全 ASCII → 原樣
     except UnicodeEncodeError:
-        return "=?UTF-8?B?" + base64.b64encode(value.encode("utf-8")).decode("ascii") + "?="
+        pass
+    out: list[str] = []
+    for tok in value.split(" "):
+        try:
+            tok.encode("ascii")
+            out.append(tok)  # ASCII 詞（含 email 位址）保持原樣
+        except UnicodeEncodeError:
+            out.append(_encode_word(tok))  # 僅含非 ASCII 的詞才編碼
+    return " ".join(out)
+
+
+def _fold_header_line(line: str) -> str:
+    """RFC 5322 表頭折行：超過 78 字元且有空白時，於空白處插入 ``CRLF + 空白`` 續行。
+
+    擬真硬化：長表頭在真實郵件會折行；產品端 ``imap_client._unfold`` 會把續行還原為單一空白，
+    本折行正是驅動該還原路徑（折在既有空白處 → unfold 後與原值逐字相符）。
+    """
+    if len(line) <= 78 or " " not in line:
+        return line
+    out: list[str] = []
+    cur = ""
+    for word in line.split(" "):
+        if cur and len(cur) + 1 + len(word) > 78:
+            out.append(cur)
+            cur = word
+        else:
+            cur = word if not cur else cur + " " + word
+    out.append(cur)
+    return "\r\n ".join(out)  # 續行以單一空白開頭（折疊空白）
 
 
 def _render_header_literal(m: "SimMessage", section: str) -> bytes:
     """產生 ``BODY[HEADER.FIELDS (...)]`` 的 literal：依索取欄位輸出、結尾空行（單一可信來源）。
 
-    非 ASCII 值以 RFC 2047 encoded-word 編碼（真實郵件即如此存放，非裸 UTF-8），確保產品端解碼
-    路徑 ``_decode`` 被真實位元組流驅動；空值欄位（如空主旨）略過不輸出。
+    非 ASCII 值逐詞以 RFC 2047 encoded-word 編碼（真實郵件即如此存放，非裸 UTF-8）；長表頭折行
+    （驅動產品 ``_unfold``）。皆確保產品端解碼路徑被真實位元組流驅動；空值欄位（如空主旨）略過。
     """
     fm = re.search(r"HEADER\.FIELDS\s*\(([^)]*)\)", section, re.IGNORECASE)
     names = fm.group(1).split() if fm else list(m.fields.keys())
@@ -125,5 +158,5 @@ def _render_header_literal(m: "SimMessage", section: str) -> bytes:
         key = raw.upper()
         if key in m.fields and m.fields[key]:
             title = _HEADER_TITLE.get(key, raw)
-            lines.append(f"{title}: {_encode_header_value(m.fields[key])}")
+            lines.append(_fold_header_line(f"{title}: {_encode_header_value(m.fields[key])}"))
     return ("\r\n".join(lines) + "\r\n\r\n").encode("utf-8")

@@ -59,3 +59,24 @@ def fresh_server(**opts):
     from imap_server import ImapServer
 
     return ImapServer(master_mailboxes(), **opts)
+
+
+def bulk_mailboxes(n: int = 120) -> dict[str, list[SimMessage]]:
+    """大量郵件母版（>100 封）—— 驅動產品 ``_FETCH_BATCH=50`` 的**多批 UID FETCH** 與進度回報。
+
+    uid 自 1000 連續編號；含一封 CJK 主旨以確保多批路徑也經 encoded-word 解碼。
+    """
+    msgs = [
+        message(1000 + i, f"Bulk message {i}", f"sender{i}@x.com", "me@outlook.my", "Mon, 1 Jan 2026")
+        for i in range(n)
+    ]
+    if n > 0:
+        msgs[n // 2] = message(1000 + n // 2, "批量信件 CJK", "寄件者 <bulk@x.com>", "me@outlook.my", "Tue")
+    return {"INBOX": msgs, "Archive": []}
+
+
+def bulk_server(n: int = 120, **opts):
+    """大量郵件的 ``ImapServer``（驅動多批 FETCH；opts 透傳）。"""
+    from imap_server import ImapServer
+
+    return ImapServer(bulk_mailboxes(n), **opts)

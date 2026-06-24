@@ -16,6 +16,7 @@ from imap_dataset import (
     INBOX_NEWSLETTER_UID,
     INBOX_QUOTED_FROM_UID,
     INBOX_USER_DELETED_UID,
+    bulk_server,
     fresh_server,
 )
 from imap_sim import DELETED
@@ -101,6 +102,39 @@ def test_bulk_classify_reads_each_source_folder_once(monkeypatch):
     # 第二層：四封進 Archive、他人 \Deleted(106) 全程不被波及
     assert len(server.mailboxes["Archive"]) == 4
     assert (INBOX_USER_DELETED_UID, frozenset({DELETED})) in server.snapshot()["INBOX"]
+
+
+def test_multibatch_fetch_over_100_messages_drives_progress(monkeypatch):
+    # >100 封 → 產品 _FETCH_BATCH=50 分批：120 封 = 50+50+20 = 3 批 UID FETCH，進度逐批前進
+    server = bulk_server(120)
+    client = connected_client(monkeypatch, server)
+    progress: list[tuple[int, int]] = []
+    headers = client.list_headers("INBOX", on_progress=lambda d, t: progress.append((d, t)))
+    assert len(headers) == 120 and all(h.uid for h in headers)  # 全部、UID 全非空
+    assert server.command_count("UID FETCH") == 3               # 多批
+    server.assert_all_fetches_request_uid()
+    assert progress[0] == (50, 120) and progress[-1] == (120, 120)  # 50 → 100 → 120
+    # 多批路徑也正確解碼 CJK encoded-word
+    assert any(h.subject == "批量信件 CJK" for h in headers)
+
+
+def test_bottleneck_surfaces_redundant_select_waste(monkeypatch):
+    # 分析助手深化：分類迴圈每封 move 前都重 SELECT 來源夾（同夾同模式）→ bottleneck 點出可省的重複
+    server = fresh_server()
+    client = connected_client(monkeypatch, server)
+    cache = classifier.ClassifyCache()
+    rows = _rows(
+        (str(INBOX_NEWSLETTER_UID), "INBOX", "Archive"),
+        (str(INBOX_CJK_UID), "INBOX", "Archive"),
+        (str(INBOX_EMOJI_UID), "INBOX", "Archive"),
+    )
+    items = classifier.build_report(client, rows, cache=cache)
+    classifier.execute(client, items, cache=cache)
+    # 3 封 → 3 次讀寫 SELECT INBOX，後 2 次是對「已選同模式」夾的重複（首次 EXAMINE→SELECT 模式切換不算）
+    assert server.redundant_selects() == 2
+    bn = server.bottleneck()
+    assert bn["redundant_selects"] == 2 and bn["redundant_full_folder_reads"] == {}
+    assert bn["most_frequent_command"] in ("SELECT", "UID MOVE")
 
 
 def test_redundant_refetch_would_be_caught_by_log(monkeypatch):
