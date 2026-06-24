@@ -1,8 +1,9 @@
 name: CI
 
-# 每次 push / PR 都離線跑：測試（含 IMAP 模擬器契約測試）、型別檢查、覆蓋率閘門。
-# 這是「seam 以下」的把關：tests/imap_sim.py 忠實模擬 IMAP，契約測試查核我們送出的
-# IMAP 指令是否正確、安全（見 doc/lessons-learned.md 的 UID / move 事件）。
+# 每次 push / PR 都離線跑：測試（含 IMAP 引擎契約/回歸測試）、型別檢查、覆蓋率閘門。
+# 這是「seam 以下」的把關：產品跑真 imaplib over 線級引擎（tests/imap_server.py::ImapServer +
+# tests/imap_transport.py），查核送出的 IMAP 指令是否正確、安全（見 doc/lessons-learned.md 的
+# UID / move 事件）。
 
 on:
   push:

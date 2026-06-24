@@ -104,25 +104,25 @@ def _encode_word(tok: str) -> str:
 
 
 def _encode_header_value(value: str) -> str:
-    """ASCII 直接輸出；含非 ASCII → **逐空白分隔詞** RFC 2047 編碼。
+    """ASCII 直接輸出；含非 ASCII → RFC 2047 編碼**第一個到最後一個非 ASCII 字元的整段**為單一
+    encoded-word，前後純 ASCII 部分保持原樣。
 
-    擬真硬化：真實 MUA 只把含非 ASCII 的「詞」編成 encoded-word，ASCII 詞（如 email 位址）保持
-    原樣——例 ``"王經理 <boss@x.com>"`` → ``"=?UTF-8?B?..?= <boss@x.com>"``（只編顯示名）。
-    FETCH 表頭 literal 的**單一可信編碼器**（``imap_server.ImapServer`` 經 ``_render_header_literal`` 共用）。
+    擬真硬化：真實 MUA 把含非 ASCII 的顯示段編成 encoded-word，尾端 ASCII（如 email 位址）保留——
+    例 ``"王經理 <boss@x.com>"`` → ``"=?UTF-8?B?..?= <boss@x.com>"``（只編顯示名）。
+
+    **關鍵正確性**：整段（含其間空白）編進**單一** encoded-word，空白被 base64 保留；切勿拆成多個
+    相鄰 encoded-word——RFC 2047 規定 ``decode_header`` 會吃掉相鄰 encoded-word 間的空白，導致
+    ``"週報 報告"`` 還原成 ``"週報報告"``（空白遺失）。FETCH 表頭 literal 的**單一可信編碼器**
+    （``imap_server.ImapServer`` 經 ``_render_header_literal`` 共用）。
     """
     try:
         value.encode("ascii")
         return value  # 全 ASCII → 原樣
     except UnicodeEncodeError:
         pass
-    out: list[str] = []
-    for tok in value.split(" "):
-        try:
-            tok.encode("ascii")
-            out.append(tok)  # ASCII 詞（含 email 位址）保持原樣
-        except UnicodeEncodeError:
-            out.append(_encode_word(tok))  # 僅含非 ASCII 的詞才編碼
-    return " ".join(out)
+    nonascii = [i for i, ch in enumerate(value) if ord(ch) > 0x7F]
+    lo, hi = nonascii[0], nonascii[-1] + 1  # 涵蓋首尾非 ASCII 之間的所有字元（含 ASCII 與空白）
+    return value[:lo] + _encode_word(value[lo:hi]) + value[hi:]
 
 
 def _fold_header_line(line: str) -> str:

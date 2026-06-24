@@ -86,32 +86,32 @@ touching the real IMAP protocol and is where the highest-risk bugs hide. For ANY
 - **Test the request, not just the response.** Assert what IMAP command/arguments we send (e.g. FETCH must
   request `UID`), not only how we parse a reply. A parser test fed a fabricated reply proves nothing about the
   contract — that exact gap shipped the 0.5.1 UID-empty bug.
-- **Use the faithful simulator, not hand-crafted replies.** Exercise `OutlookIMAPClient` against
-  `tests/imap_sim.py::FakeIMAPConn` (mirrors `imaplib`'s interface + response structures; **only returns data
-  items that were requested**; EXPUNGE removes *all* `\Deleted`; its command log lets you verify dispatched
-  commands). When you add a new IMAP method, extend the simulator with the *real* server behavior in lockstep.
+- **Use the wire-level engine, not hand-crafted replies.** Exercise `OutlookIMAPClient` against the **real
+  `imaplib.IMAP4_SSL` over the in-memory server engine** — `tests/imap_server.py::ImapServer` (a bytes-in/out
+  IMAP server) behind `tests/imap_transport.py::SimIMAP4_SSL`. The product runs **genuine imaplib**; only the
+  socket is swapped, so fidelity is automatic and there is no fabrication surface. When you add a new IMAP method,
+  extend the engine with the *real* server behavior in lockstep (add a fidelity case first — see below).
 - **Assert output invariants.** e.g. every `MailHeader.uid` is non-empty; destructive ops never delete without a
   verified copy. Prefer a loud failure over silent corruption.
 
-**The simulator is the bedrock of offline testing — keep it rock-solid (this is mandatory for new IMAP work):**
-1. **Byte-identical fidelity, verified against real imaplib.** Response structures MUST equal what the real
-   `imaplib` parser produces. `tests/test_imap_fidelity.py` feeds RFC 3501 wire bytes through the real parser
-   (`tests/imaplib_probe.py::ScriptedIMAP4`) and asserts `FakeIMAPConn` matches **byte-for-byte**. When a
-   response format is uncertain, **confirm it against the real parser (or a real run) — never guess.** Adding a
-   new IMAP response → add a fidelity case first.
-2. **Master dataset, copy-per-test.** Start every test from `tests/imap_dataset.py::fresh_sim()` (an independent
-   deep copy of a comprehensive master mailbox set: ASCII/CJK/emoji/encoded-word/seen/user-deleted/empty/long
-   subjects, nested + CJK folder names). Extend the master when a new scenario needs covering.
-3. **Two-layer verification.** After an operation assert BOTH: (1) the command log (`sim.log` /
-   `sim.uid_commands(...)`) — the dispatched IMAP commands/args/order are correct and safe; (2) `sim.snapshot()`
-   before vs after — the data mutations are correct (and nothing else changed; e.g. a foreign `\Deleted` message
-   is never collaterally expunged).
-
-**Wire-level engine (the bedrock's strongest form; P1–P2 landed on `chore/imap-server-sim`):** prefer the
-**real `imaplib.IMAP4_SSL` over the in-memory server engine** — `tests/imap_server.py::ImapServer` (bytes-in/out
-IMAP server) behind `tests/imap_transport.py::SimIMAP4_SSL` (`install_server`/`connected_client`/`fresh_server`).
-The product runs **genuine imaplib**; only the socket is swapped → fidelity is automatic. New product-behavior
-tests use `fresh_server()` + `connected_client`, not the legacy `FakeIMAPConn` (migration in progress).
+**The engine is the bedrock of offline testing — keep it rock-solid (mandatory for new IMAP work). FakeIMAPConn
+was retired in P3; `tests/imap_sim.py` now holds only shared wire helpers + the message model:**
+1. **Byte-identical fidelity, verified against real imaplib.** The engine's wire output MUST parse correctly
+   through the real `imaplib` parser. `tests/test_imap_server.py` section B feeds engine wire through
+   `tests/imaplib_probe.py::ScriptedIMAP4` (the real parser) and asserts structure + literal bytes;
+   `tests/test_imap_server_behaviors.py` drives raw imaplib over the engine for server-side edge behaviors. When a
+   response format is uncertain, **confirm it against the real parser (`imaplib/imaplib.py` v2.60 reference, or a
+   real run) — never guess.** Adding a new IMAP response → add a fidelity case first.
+2. **Master dataset, copy-per-test.** Start every product-behavior test from
+   `tests/imap_dataset.py::fresh_server()` (independent deep copy of a comprehensive master: ASCII/CJK/emoji/
+   encoded-word/seen/user-deleted/empty/long subjects, nested + CJK folder names; `bulk_server(n)` for >100-msg
+   multi-batch FETCH). Extend the master when a new scenario needs covering. NB: encode a non-ASCII header run as a
+   **single** encoded-word — adjacent encoded-words lose interior whitespace via `decode_header`
+   (see `imap_sim._encode_header_value`).
+3. **Two-layer verification.** After an operation assert BOTH: (1) the command log (`server.log` /
+   `server.commands(...)`) — dispatched IMAP commands/args/order are correct and safe; (2) `server.snapshot()`
+   before vs after — data mutations are correct (and nothing else changed; e.g. a foreign `\Deleted` message is
+   never collaterally expunged).
 - **imaplib reference source = `imaplib/imaplib.py` (vendored, v2.60; gitignored).** Whenever you are unsure
   what bytes the simulator must return to the upper layer, **consult that source (or do a real run) — never
   guess.** Caveat: the product actually runs the *stdlib* imaplib (`C:\Python312\Lib\imaplib.py`, 3.12.x); 2.60

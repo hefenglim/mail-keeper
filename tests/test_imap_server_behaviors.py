@@ -165,6 +165,17 @@ def test_engine_encodes_only_nonascii_words_in_header():
     assert _decode(msg.get("Subject")) == "週報 Q1"
 
 
+def test_engine_adjacent_nonascii_words_preserve_whitespace():
+    # SR 回歸：相鄰非 ASCII 詞（無 ASCII 間隔）須整段編進**單一** encoded-word，空白才不被
+    # decode_header 吃掉（拆成相鄰 encoded-word → "週報 報告" 會還原成 "週報報告"）。
+    for subj in ("週報 報告", "週報   報告", "王經理 您好"):
+        server = ImapServer({"INBOX": [message(10, subj)]})
+        m = _imap_over(server)
+        m.select("INBOX", readonly=True)
+        typ, data = m.uid("fetch", "10", "(UID BODY.PEEK[HEADER.FIELDS (SUBJECT)])")
+        assert _decode(email.message_from_bytes(data[0][1]).get("Subject")) == subj
+
+
 def test_engine_non_peek_body_sets_seen_but_peek_does_not():
     # 擬真：非 PEEK 的 BODY[...] 設 \Seen（真實 IMAP 副作用）；BODY.PEEK[...] 不設（產品一律用 PEEK）
     server = ImapServer({"INBOX": [message(10, "A"), message(11, "B")]})
