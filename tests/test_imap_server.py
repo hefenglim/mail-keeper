@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import base64
 
+import pytest
+
 import imaplib_probe as probe
 from imap_dataset import (
     INBOX_CJK_UID,
@@ -24,7 +26,7 @@ from imap_server import ImapServer
 from imap_sim import FakeIMAPConn, client_on, message
 from imap_transport import SimIMAP4_SSL, connected_client, install_server
 
-from mailkeeper.imap_client import OutlookIMAPClient
+from mailkeeper.imap_client import BackendError, OutlookIMAPClient
 
 _ITEMS = "(UID BODY.PEEK[HEADER.FIELDS (SUBJECT FROM TO DATE)])"
 
@@ -55,6 +57,18 @@ def test_real_client_decodes_cjk_emoji_quoted_and_empty(monkeypatch):
 def test_real_client_lists_folders_over_engine(monkeypatch):
     folders = connected_client(monkeypatch, _server()).list_folders()
     assert set(folders) == {"INBOX", "Sent", "Archive", "Work/Projects", "台北"}  # CJK/巢狀經 mUTF-7
+
+
+def test_list_headers_raises_if_server_drops_uid(monkeypatch):
+    # 防線（0.5.1 致命 bug）：伺服器壞掉（索取了卻不回 UID）→ 大聲報錯，不靜默吐空 uid
+    with pytest.raises(BackendError):
+        connected_client(monkeypatch, _server(drop_uid=True)).list_headers("INBOX")
+
+
+def test_list_headers_raises_on_batch_fetch_failure(monkeypatch):
+    # 防線：批次 FETCH 回 NO → 大聲報錯，不靜默回傳不完整標頭
+    with pytest.raises(BackendError):
+        connected_client(monkeypatch, _server(fail_fetch=True)).list_headers("INBOX")
 
 
 def test_context_manager_connects_and_logs_out_over_engine(monkeypatch):

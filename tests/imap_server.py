@@ -82,6 +82,10 @@ class ImapServer:
         階層分隔字元（LIST 回應用）。
     supports_move / supports_uidplus : bool
         伺服器能力旗標（影響 CAPABILITY 與 P2 的 MOVE/UID EXPUNGE 行為）。
+    drop_uid : bool
+        「不守規矩的伺服器」：即使索取 UID，FETCH 回應也不含 UID（驅動上層防線，釘死 0.5.1 致命 bug）。
+    fail_fetch : bool
+        批次 UID FETCH 一律回 ``NO``（驅動上層大聲報錯、不靜默回傳不完整標頭）。
     """
 
     def __init__(
@@ -91,6 +95,8 @@ class ImapServer:
         sep: str = "/",
         supports_move: bool = True,
         supports_uidplus: bool = True,
+        drop_uid: bool = False,
+        fail_fetch: bool = False,
     ) -> None:
         self.mailboxes: dict[str, list[SimMessage]] = {
             k: list(v) for k, v in (mailboxes or {"INBOX": []}).items()
@@ -98,6 +104,8 @@ class ImapServer:
         self._sep = sep
         self._supports_move = supports_move
         self._supports_uidplus = supports_uidplus
+        self._drop_uid = drop_uid
+        self._fail_fetch = fail_fetch
         self._uidnext: dict[str, int] = {
             name: (max((m.uid for m in msgs), default=0) + 1)
             for name, msgs in self.mailboxes.items()
@@ -362,6 +370,9 @@ class ImapServer:
     def _uid_fetch(self, tag: bytes, tail: bytes) -> bytes:
         uidset, _, items = tail.partition(b" ")
         items_s = items.decode("ascii", "replace")
+        if self._fail_fetch:  # 不守規矩：批次 FETCH 一律失敗 → 上層應大聲報錯
+            self._record(tag, "UID FETCH", (uidset.decode("ascii", "replace"), items_s), self._selected, (), "NO", None)
+            return self._tagged(tag, "NO", "FETCH failed (simulated)")
         want = set(_parse_uidset(uidset))
         msgs = [m for m in self._sel_msgs() if m.uid in want]
         body = self._render_fetch(msgs, items_s)
@@ -377,7 +388,7 @@ class ImapServer:
         帶 literal 的回應形如 ``* <seq> FETCH (UID <u> BODY[<sec>] {<n>}\\r\\n<n bytes>)\\r\\n``，
         經真 imaplib 解析為 ``[(b'<seq> (UID <u> BODY[<sec>] {<n>}', b'<literal>'), b')']``。
         """
-        uid_m = re.search(r"\bUID\b", items)
+        uid_m = re.search(r"\bUID\b", items) if not self._drop_uid else None  # drop_uid：索取了也不回 UID
         flags_m = re.search(r"\bFLAGS\b", items)
         body_m = re.search(r"BODY(?:\.PEEK)?\[([^\]]*)\]", items)
 

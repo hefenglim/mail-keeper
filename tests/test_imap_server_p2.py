@@ -28,7 +28,7 @@ from imap_sim import DELETED, FLAGGED, SEEN
 from imap_transport import connected_client
 from imaplib_probe import ScriptedIMAP4
 
-from mailkeeper.imap_client import BackendError
+from mailkeeper.imap_client import BackendError, ReauthRequired
 
 
 def _server(**kw) -> ImapServer:
@@ -139,6 +139,34 @@ def test_session_loss_mid_move_transparently_reconnects(monkeypatch, mode):
     assert server.command_count("AUTHENTICATE") >= 2  # 初次 + 重連各一次認證
     assert (INBOX_USER_DELETED_UID, frozenset({DELETED})) in server.snapshot()["INBOX"]  # 106 未波及
     assert len(server.mailboxes["Archive"]) == 1
+
+
+def test_reauth_required_clean_stops_move(monkeypatch):
+    # 靜默續期不可行（provider 拋 ReauthRequired）→ move 乾淨停止外拋、未搬走（不退化互動登入）
+    server = _server()
+    server.arm_expiry(before_op="move", nth=1, mode="eof")
+
+    def provider():
+        raise ReauthRequired("re-login")
+
+    _no_sleep(monkeypatch)
+    client = connected_client(monkeypatch, server, token_provider=provider)
+    with pytest.raises(ReauthRequired):
+        client.move(str(INBOX_NEWSLETTER_UID), "Archive", "INBOX")
+    assert INBOX_NEWSLETTER_UID in {m.uid for m in server.mailboxes["INBOX"]}  # 未搬走
+
+
+def test_backoff_is_bounded_and_capped(monkeypatch):
+    server = _server()
+    client = connected_client(
+        monkeypatch, server, token_provider=lambda: "tok",
+        backoff_base_seconds=1.0, backoff_cap_seconds=4.0, max_reconnect_attempts=5,
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr("mailkeeper.imap_client.time.sleep", lambda s: sleeps.append(s))
+    server.arm_expiry(before_op="move", nth=1, mode="eof")  # 一次過期 → 一次重連
+    client.move(str(INBOX_NEWSLETTER_UID), "Archive", "INBOX")
+    assert sleeps and all(s <= 4.0 for s in sleeps)  # 有退避且不超過封頂
 
 
 def test_reconnect_exhausted_raises_and_preserves_source(monkeypatch):
