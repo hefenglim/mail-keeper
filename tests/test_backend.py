@@ -1,7 +1,7 @@
 """Foundational backend tests — pure helpers only.
 
 純函式單元測試（MailHeader / 折疊解析 / 切批 / UID 抽取）。任何需要 IMAP「連線」的測試
-一律改用 `tests/imap_sim.py::FakeIMAPConn`，集中於 `test_imap_contract.py`。
+一律改用線級引擎（`tests/imap_server.py::ImapServer` + `imap_transport`，真 imaplib over 引擎）。
 """
 from __future__ import annotations
 

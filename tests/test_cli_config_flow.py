@@ -1,6 +1,7 @@
 """US1/US2 wiring — cli._run integrates config load, bootstrap, identity check. Test-first.
 
-連線一律走真實 OutlookIMAPClient + FakeIMAPConn（install），不再用任意假 client 替身。
+連線一律走真實 OutlookIMAPClient + 線級 IMAP 引擎（install_server），不用任意假 client 替身。
+（P3：已自 FakeIMAPConn 遷移至 imap_server 引擎。）
 """
 from __future__ import annotations
 
@@ -8,8 +9,8 @@ import json
 
 import pytest
 
-from imap_dataset import fresh_sim
-from imap_sim import install
+from imap_dataset import fresh_server
+from imap_transport import install_server
 
 from mailkeeper import cli, config_store
 
@@ -33,14 +34,14 @@ def test_run_valid_config_uses_configured_email_and_timeout(tmp_cwd, monkeypatch
     )
     monkeypatch.setattr(cli, "get_access_token", lambda cfg: ("tok", "me@x.com"))
     # 從母版出發：INBOX 有多封（含 newsletter），run_listing/organizer 規則迴圈確實執行
-    sim = fresh_sim()
-    cap = install(monkeypatch, sim)
+    server = fresh_server()
+    cap = install_server(monkeypatch, server)
 
-    cli._run()  # identity matches → no prompt；真實 client 跑在模擬器上
+    cli._run()  # identity matches → no prompt；真實 client 跑在引擎上
 
     assert cap["timeout"] == 42  # 設定的 timeout 確實傳到 IMAP4_SSL
     # XOAUTH2 認證字串帶設定的 email 與 token
-    assert sim.auth_string == b"user=me@x.com\x01auth=Bearer tok\x01\x01"
+    assert server.auth_string == b"user=me@x.com\x01auth=Bearer tok\x01\x01"
 
 
 def test_run_mismatch_non_interactive_aborts(tmp_cwd, monkeypatch):
@@ -50,7 +51,7 @@ def test_run_mismatch_non_interactive_aborts(tmp_cwd, monkeypatch):
         json.dumps({"client_id": "abc", "email": "configured@x.com"}), encoding="utf-8"
     )
     monkeypatch.setattr(cli, "get_access_token", lambda cfg: ("tok", "different@x.com"))
-    cap = install(monkeypatch, fresh_sim())
+    cap = install_server(monkeypatch, fresh_server())
 
     with pytest.raises(config_store.ConfigError):
         cli._run()

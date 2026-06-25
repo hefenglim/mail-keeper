@@ -349,7 +349,10 @@ class OutlookIMAPClient:
 
     def move(self, uid: str, dest_folder: str, mailbox: str = "INBOX") -> None:
         """將郵件搬到指定資料夾。優先用 UID MOVE；伺服器不支援時退回 copy→標刪→UID EXPUNGE。
-        連線中斷會透明重連並重試本次搬移（搬移自含 select，重連後從頭重做、冪等安全）。
+        連線中斷會透明重連並重試本次搬移（搬移自含 select）。主路徑 UID MOVE 重試**冪等**
+        （重搬已搬走的郵件為 no-op）；惟 **fallback 非完全冪等**：若於 COPY 成功後、UID EXPUNGE
+        前斷線，重試會重做 COPY → 目標夾可能出現**重複複本**（非資料遺失，來源仍正確移除）。
+        此為已知限制（見 roadmap-backlog；正解需重試前先偵測既有複本或改用更原子的序列）。
 
         安全鐵則（破壞性動作，避免資料遺失）：
           1. **COPY 成功才標刪**：copy 未成功就絕不 `\\Deleted`+expunge（沒有複本就刪 = 永久遺失）。
