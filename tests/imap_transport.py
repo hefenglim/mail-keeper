@@ -21,10 +21,14 @@ from imap_server import ImapServer
 class SimIMAP4_SSL(imaplib.IMAP4_SSL):
     """傳輸層改由記憶體引擎供給；其餘全繼承真 imaplib。"""
 
-    def __init__(self, server: ImapServer, host: str = "", port: int = 993, timeout: Optional[float] = None) -> None:
+    def __init__(
+        self, server: ImapServer, host: str = "", port: int = 993,
+        timeout: Optional[float] = None, *, chunk_size: Optional[int] = None,
+    ) -> None:
         self._server = server
         self._inbuf = bytearray()   # 伺服器 → 用戶端（imaplib read/readline 由此取）
         self._outbuf = bytearray()  # 用戶端 → 伺服器（imaplib send 累積至完整行才派送）
+        self._chunk = chunk_size    # P1：每次「實體」讀取至多釋出此位元組數（模擬 TCP 分段，None=整段）
         # 略過 IMAP4_SSL.__init__ 的 ssl_context 設定（_create_socket 已覆寫、不需真 SSL），
         # 直接走 IMAP4.__init__ → open() + _connect()（讀招呼、送 CAPABILITY）。
         imaplib.IMAP4.__init__(self, host, port, timeout)
@@ -33,33 +37,67 @@ class SimIMAP4_SSL(imaplib.IMAP4_SSL):
     def open(self, host: str = "", port: Optional[int] = 993, timeout: Optional[float] = None) -> None:
         self.host = host
         self.port = port if port is not None else 993
-        self._inbuf += self._server.greeting()  # imaplib `_connect` 會立即讀此招呼
+        # on_connect()：正常回 greeting；連線期失敗（E2：timeout/tls/refused）會在此拋例外（傳遞出
+        # IMAP4.__init__ → connect() 失敗），限流（E6）回 * BYE 讓真 imaplib `_connect` 判為 error。
+        self._inbuf += self._server.on_connect()  # imaplib `_connect` 會立即讀此招呼
 
     def _create_socket(self, timeout: Any = None) -> Any:  # 永不被呼叫（open 已覆寫、不建 socket）
         return None
 
-    def read(self, size: int) -> bytes:
-        self._server.raise_if_socket_dead()  # 失效注入：oserror/sslerror 模式於讀取時拋（擬真斷線）
-        data = bytes(self._inbuf[:size])
-        del self._inbuf[:size]
+    def _pull(self, maxn: int) -> bytes:
+        """自緩衝取至多 maxn bytes（chunk_size 設定時再受其上限）。
+
+        模擬的是「對 imaplib reader 的**交付分段**」——位元組已同步緩衝於 ``_inbuf``，並非真正的
+        非同步 TCP 到達；用途是驗證 ``read``/``readline`` 在任意切塊下仍正確重組（含 mid-literal）。
+        """
+        n = maxn if self._chunk is None else min(maxn, self._chunk)
+        n = min(n, len(self._inbuf))
+        data = bytes(self._inbuf[:n])
+        del self._inbuf[:n]
         return data
+
+    def read(self, size: int) -> bytes:
+        self._server.raise_if_socket_dead()  # 失效注入：oserror/sslerror/timeout 模式於讀取時拋（擬真斷線）
+        if self._chunk is None:
+            data = bytes(self._inbuf[:size])
+            del self._inbuf[:size]
+            return data
+        # P1：逐塊累積至滿 size（真實 buffered reader 的語意：read(size) 回正好 size，自行重組分段）
+        out = bytearray()
+        while len(out) < size and self._inbuf:
+            out += self._pull(size - len(out))
+        return bytes(out)
 
     def readline(self) -> bytes:
         self._server.raise_if_socket_dead()  # 同上；eof 模式則由空緩衝自然 EOF（→ imaplib abort）
-        idx = self._inbuf.find(b"\r\n")
-        if idx == -1:  # 引擎一律回完整 CRLF 行；走到這代表緩衝已空 → imaplib 視為 EOF/abort
-            line = bytes(self._inbuf)
-            self._inbuf.clear()
+        if self._chunk is None:
+            idx = self._inbuf.find(b"\r\n")
+            if idx == -1:  # 引擎一律回完整 CRLF 行；走到這代表緩衝已空 → imaplib 視為 EOF/abort
+                line = bytes(self._inbuf)
+                self._inbuf.clear()
+                return line
+            idx += 2
+            line = bytes(self._inbuf[:idx])
+            del self._inbuf[:idx]
             return line
-        idx += 2
-        line = bytes(self._inbuf[:idx])
-        del self._inbuf[:idx]
-        return line
+        # P1：逐 byte 累積直到換行（絕不越過 \n 吃進下一行）——分段下仍正確切行
+        out = bytearray()
+        while not out.endswith(b"\n") and self._inbuf:
+            out += self._pull(1)
+        return bytes(out)
 
     def send(self, data: Any) -> None:  # supertype 接受 Buffer；此處實際收到 imaplib 送出的 bytes
         # imaplib 可能分段送（命令列、AUTHENTICATE 的 base64 與 CRLF 各一次）；累積到完整行才派送。
         self._outbuf += data
         while True:
+            need = self._server.expecting_literal()  # P6：APPEND literal → 以原始位元組（含內部 CRLF）餵入
+            if need:
+                if len(self._outbuf) < need:
+                    break  # literal 尚未收齊，等下一次 send
+                literal = bytes(self._outbuf[:need])
+                del self._outbuf[:need]
+                self._inbuf += self._server.feed_literal(literal)
+                continue
             idx = self._outbuf.find(b"\r\n")
             if idx == -1:
                 break
@@ -71,11 +109,15 @@ class SimIMAP4_SSL(imaplib.IMAP4_SSL):
         pass
 
 
-def install_server(monkeypatch: Any, server: ImapServer, *, capture: Optional[dict] = None) -> dict:
+def install_server(
+    monkeypatch: Any, server: ImapServer, *, capture: Optional[dict] = None,
+    chunk_size: Optional[int] = None,
+) -> dict:
     """把 ``imaplib.IMAP4_SSL`` 換成「回傳綁定此引擎的 SimIMAP4_SSL」的工廠。
 
     讓**真實的** ``OutlookIMAPClient.connect()`` 跑在引擎之上；建構參數（host/port/timeout）
     記到回傳 dict，供逾時/連線測試查核。這是「所有 Outlook IMAP 連線在測試中改走線級引擎」的統一接點。
+    ``chunk_size``（P1）：傳輸層以此上限分段交付，模擬 TCP 分段、驗證讀取重組。
     """
     cap: dict = capture if capture is not None else {}
     cap.setdefault("constructed", 0)
@@ -85,21 +127,24 @@ def install_server(monkeypatch: Any, server: ImapServer, *, capture: Optional[di
         cap["port"] = port
         cap["timeout"] = timeout
         cap["constructed"] += 1
-        return SimIMAP4_SSL(server, host, port, timeout)
+        return SimIMAP4_SSL(server, host, port, timeout, chunk_size=chunk_size)
 
     monkeypatch.setattr("mailkeeper.imap_client.imaplib.IMAP4_SSL", factory)
     return cap
 
 
-def connected_client(monkeypatch: Any, server: ImapServer, **client_kw: Any) -> Any:
+def connected_client(
+    monkeypatch: Any, server: ImapServer, *, chunk_size: Optional[int] = None, **client_kw: Any
+) -> Any:
     """install_server() + 建構真實 ``OutlookIMAPClient`` + connect()，回傳已連線 client。
 
     用於需要「重連」的測試：``_with_reconnect`` 重建 ``IMAP4_SSL`` 時，工廠讓它取回**同一個**引擎
-    （於是 ``authenticate`` 再次被呼叫、session 恢復）。``client_kw`` 透傳如 token_provider/on_status。
+    （於是 ``authenticate`` 再次被呼叫、session 恢復）。``client_kw`` 透傳如 token_provider/on_status；
+    ``chunk_size``（P1）透傳給傳輸層做分段交付。
     """
     from mailkeeper.imap_client import OutlookIMAPClient
 
-    install_server(monkeypatch, server)
+    install_server(monkeypatch, server, chunk_size=chunk_size)
     c = OutlookIMAPClient("user@x.com", "tok", **client_kw)
     c.connect()
     return c

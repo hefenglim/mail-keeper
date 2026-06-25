@@ -81,6 +81,16 @@ The protocol is the invariant; everything below it is replaceable. Full map: `Ma
 matching and action sequences with no network. Also cover `_decode()` on MIME encoded-word headers and the
 dry-run vs. real-run action sets.
 
+**MANDATE — any code interfacing with the `imaplib` layer MUST be tested through the IMAP Simulator Engine,
+simulating BOTH normal and abnormal conditions (non-negotiable).** The engine (`tests/imap_server.py::ImapServer`
++ `tests/imap_transport.py::SimIMAP4_SSL`) is the sole sanctioned harness for seam-crossing code: never hand-craft
+imaplib replies, never resurrect FakeIMAPConn. Cover the happy path AND fault paths (`arm_expiry(...)`:
+eof/oserror/sslerror/bye/authfail). If a needed scenario falls in a `規劃中` gap, **extend the engine first
+(with a fidelity case), then write the product test** — never bypass the engine, never fabricate. The engine's
+full goals, capability surface, conformance status, and roadmap are the **spec: `doc/imap-simulator-engine-spec.md`**.
+Note: engine wire transcripts / `dump()` capture the base64 SASL bearer line — keep it test-only, never feed a real
+account or paste real-token transcripts (spec §5.8).
+
 **Backend-seam discipline (non-negotiable — see `doc/lessons-learned.md`).** `imap_client.py` is the only code
 touching the real IMAP protocol and is where the highest-risk bugs hide. For ANY code crossing the seam:
 - **Test the request, not just the response.** Assert what IMAP command/arguments we send (e.g. FETCH must
@@ -142,6 +152,8 @@ flows, delegated scope `IMAP.AccessAsUser.All`. Put `client_id` and your mailbox
 Full steps in `MailKeeper-Handoff.html` and `README.md`.
 
 ## 10. References
+- **IMAP Simulator Engine spec (normative — what the engine must be & its conformance status): `doc/imap-simulator-engine-spec.md`**
+- IMAP simulator rebuild plan (Option B, P1–P4 history): `doc/imap-simulator-plan.md`
 - Constitution (source of truth for §2): `.specify/memory/constitution.md`
 - Specs / plans / tasks: `.specify/specs/NNN-*/`
 - Handoff & architecture diagram: `MailKeeper-Handoff.html`

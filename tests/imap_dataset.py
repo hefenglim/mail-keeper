@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from imap_sim import DELETED, SEEN, SimMessage, message
+from imap_sim import DELETED, SEEN, SimMessage, message, mime_message
 
 # 具名常數：測試引用「眾所周知」的郵件，避免魔術數字。
 INBOX_NEWSLETTER_UID = 101
@@ -80,3 +80,38 @@ def bulk_server(n: int = 120, **opts):
     from imap_server import ImapServer
 
     return ImapServer(bulk_mailboxes(n), **opts)
+
+
+# ── E11：帶 MIME 內文 / 附件的母版（驅動 BODY[]/BODY[TEXT]/RFC822/RFC822.SIZE/BODYSTRUCTURE）──
+MIME_PLAIN_UID = 501       # 純文字 text/plain
+MIME_ALT_UID = 502         # multipart/alternative（text + html），含 CJK
+MIME_ATTACH_UID = 503      # multipart/mixed（text + 附件）
+
+
+def mime_mailboxes() -> dict[str, list[SimMessage]]:
+    """帶完整 RFC822 內文的母版（每次呼叫皆全新物件）。INBOX 同母版以維持既有計數不變。"""
+    return {
+        "INBOX": [
+            mime_message(
+                MIME_PLAIN_UID, "Plain note", "alice@x.com", "me@outlook.my", "Mon, 1 Jan 2026",
+                text="Hello world.\nSecond line.\n",
+            ),
+            mime_message(
+                MIME_ALT_UID, "週報 內文", "王經理 <boss@x.com>", "me@outlook.my", "Tue, 2 Jan 2026",
+                text="純文字版本\n", html="<p>HTML 版本</p>",
+            ),
+            mime_message(
+                MIME_ATTACH_UID, "With attachment", "bob@x.com", "me@outlook.my", "Wed, 3 Jan 2026",
+                text="See attached.\n",
+                attachments=[("report.csv", b"a,b,c\r\n1,2,3\r\n", "text", "csv")],
+            ),
+        ],
+        "Archive": [],
+    }
+
+
+def mime_server(**opts):
+    """帶 MIME 內文/附件的 ``ImapServer``（E11；opts 透傳）。"""
+    from imap_server import ImapServer
+
+    return ImapServer(mime_mailboxes(), **opts)

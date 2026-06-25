@@ -12,9 +12,11 @@
 from __future__ import annotations
 
 import base64
+import email.policy
 import re
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from email.message import EmailMessage
+from typing import Any, Optional, Sequence
 
 DELETED = "\\Deleted"  # 實際字串為 \Deleted（單一反斜線）
 SEEN = "\\Seen"
@@ -23,11 +25,17 @@ FLAGGED = "\\Flagged"
 
 @dataclass
 class SimMessage:
-    """模擬器底層的一封郵件。"""
+    """模擬器底層的一封郵件。
+
+    ``fields``：HEADER.FIELDS FETCH 用的表頭值（產品讀標題的路徑）。
+    ``raw``：整封 RFC822 bytes（E11，MIME 內文/附件建模）；header-only 訊息為 ``None``，
+    引擎抓 ``BODY[]``/``RFC822`` 時退回「全表頭 + 空行」。建構詳見 :func:`mime_message`。
+    """
 
     uid: int
     fields: dict[str, str] = field(default_factory=dict)  # 表頭名（大寫）-> 值
     flags: set[str] = field(default_factory=set)
+    raw: Optional[bytes] = None
 
 
 def message(
@@ -39,11 +47,62 @@ def message(
     *,
     flags: Optional[set[str]] = None,
 ) -> SimMessage:
-    """建構一封模擬郵件的便捷函式。"""
+    """建構一封模擬郵件的便捷函式（header-only：只帶 HEADER.FIELDS 可取的表頭）。"""
     return SimMessage(
         uid,
         {"SUBJECT": subject, "FROM": sender, "TO": to, "DATE": date},
         set(flags or set()),
+    )
+
+
+def mime_message(
+    uid: int,
+    subject: str = "",
+    sender: str = "",
+    to: str = "",
+    date: str = "",
+    *,
+    text: Optional[str] = None,
+    html: Optional[str] = None,
+    attachments: Optional[Sequence[tuple]] = None,
+    flags: Optional[set[str]] = None,
+) -> SimMessage:
+    """建構一封**帶完整 RFC822 內文**的模擬郵件（E11）。
+
+    以 stdlib :class:`email.message.EmailMessage` 組裝真實郵件（非 ASCII 表頭自動編成 encoded-word、
+    內文依內容選 CTE），以 ``email.policy.SMTP``（CRLF 行尾）序列化為 ``raw`` bytes——即真實伺服器
+    在 ``BODY[]``/``RFC822`` 會回的位元組。``text``+``html`` → multipart/alternative；有 ``attachments``
+    → multipart/mixed。``attachments`` 每項為 ``(filename, data:bytes[, maintype, subtype])``。
+    ``fields`` 與表頭同源 → HEADER.FIELDS 路徑與整封內文一致。
+    """
+    msg = EmailMessage()
+    if subject:
+        msg["Subject"] = subject
+    if sender:
+        msg["From"] = sender
+    if to:
+        msg["To"] = to
+    if date:
+        msg["Date"] = date
+    if text is None and html is None:
+        text = ""
+    if text is not None:
+        msg.set_content(text)
+    if html is not None:
+        if text is not None:
+            msg.add_alternative(html, subtype="html")
+        else:
+            msg.set_content(html, subtype="html")
+    for att in attachments or []:
+        filename, data = att[0], att[1]
+        maintype, subtype = (att[2], att[3]) if len(att) >= 4 else ("application", "octet-stream")
+        msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
+    raw = msg.as_bytes(policy=email.policy.SMTP)  # CRLF 行尾、標準折行/編碼——真實 wire bytes
+    return SimMessage(
+        uid,
+        {"SUBJECT": subject, "FROM": sender, "TO": to, "DATE": date},
+        set(flags or set()),
+        raw,
     )
 
 
