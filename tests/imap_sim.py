@@ -194,14 +194,22 @@ def _fold_header_line(line: str) -> str:
       * **單一無內部空白的長 token 不可折**（如 200 字元主旨）——真實伺服器會送一整行長表頭；
       * **絕不在欄名（``Subject:``）後立即折**，否則整個值被推到續行 → 不同 Python 版本的 ``email``
         解析折疊值時對前導空白處理不一（3.10 保留、3.12 去除），造成 ``" L…"`` vs ``"L…"`` 的版本差。
-    因此第一行恆含「欄名 + 首詞」，只在其後的空白折行。
+    因此「頭段」恆含「欄名 + 首個**非空**值詞」（即使值以空白起始、含連續空白亦然），只在其後折行——
+    保證值**永不落在續行**，消除上述版本依賴。
     """
+    if len(line) <= 78:
+        return line
     words = line.split(" ")
-    if len(line) <= 78 or len(words) < 3:  # 夠短、或沒有「欄名+首詞」之後的可折空白 → 不折
+    # 頭段須含欄名 + 首個非空值詞；跳過連續空白造成的空字串（值前導空白原樣保留於頭段、不折開）。
+    head_end = 1
+    while head_end < len(words) and words[head_end] == "":
+        head_end += 1
+    head_end += 1  # 納入首個非空值詞
+    if head_end >= len(words):  # 頭段之後已無可折空白（單一無內部空白 token）→ 不折
         return line
     out: list[str] = []
-    cur = words[0] + " " + words[1]  # 欄名 + 首詞：不可折開
-    for word in words[2:]:
+    cur = " ".join(words[:head_end])  # 欄名 +（含原樣連續空白的）首詞——不可折開
+    for word in words[head_end:]:
         if len(cur) + 1 + len(word) > 78:
             out.append(cur)
             cur = word
