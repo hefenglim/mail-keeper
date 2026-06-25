@@ -185,21 +185,28 @@ def _encode_header_value(value: str) -> str:
 
 
 def _fold_header_line(line: str) -> str:
-    """RFC 5322 表頭折行：超過 78 字元且有空白時，於空白處插入 ``CRLF + 空白`` 續行。
+    """RFC 5322 表頭折行：超過 78 字元時於**值內**的空白處插入 ``CRLF + 空白`` 續行。
 
     擬真硬化：長表頭在真實郵件會折行；產品端 ``imap_client._unfold`` 會把續行還原為單一空白，
     本折行正是驅動該還原路徑（折在既有空白處 → unfold 後與原值逐字相符）。
+
+    **保真鐵則（RFC 5322 §2.2.3）**：折行只能在**既有空白**處，故
+      * **單一無內部空白的長 token 不可折**（如 200 字元主旨）——真實伺服器會送一整行長表頭；
+      * **絕不在欄名（``Subject:``）後立即折**，否則整個值被推到續行 → 不同 Python 版本的 ``email``
+        解析折疊值時對前導空白處理不一（3.10 保留、3.12 去除），造成 ``" L…"`` vs ``"L…"`` 的版本差。
+    因此第一行恆含「欄名 + 首詞」，只在其後的空白折行。
     """
-    if len(line) <= 78 or " " not in line:
+    words = line.split(" ")
+    if len(line) <= 78 or len(words) < 3:  # 夠短、或沒有「欄名+首詞」之後的可折空白 → 不折
         return line
     out: list[str] = []
-    cur = ""
-    for word in line.split(" "):
-        if cur and len(cur) + 1 + len(word) > 78:
+    cur = words[0] + " " + words[1]  # 欄名 + 首詞：不可折開
+    for word in words[2:]:
+        if len(cur) + 1 + len(word) > 78:
             out.append(cur)
             cur = word
         else:
-            cur = word if not cur else cur + " " + word
+            cur = cur + " " + word
     out.append(cur)
     return "\r\n ".join(out)  # 續行以單一空白開頭（折疊空白）
 
