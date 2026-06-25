@@ -211,12 +211,30 @@ def _fold_header_line(line: str) -> str:
     return "\r\n ".join(out)  # 續行以單一空白開頭（折疊空白）
 
 
-def _render_header_literal(m: "SimMessage", section: str) -> bytes:
+def _fold_header_line_noncompliant(line: str) -> str:
+    """**不合規折行（刻意異常注入）**：在欄名冒號後立即折行，把整個值推到續行。
+
+    某些不合規/老舊伺服器確有此行為；它使「值起始於續行」——產品 ``_unfold`` 還原時，續行的前導
+    折疊空白會浮現，且不同 Python 的 ``email`` 函式庫對此處理不一（這正是 0.x 折行保真 bug 在 3.10
+    上現形的成因）。本注入即把該真實異常情景**確定性化**：對同一輸入恆產生同一 bytes（版本無關），
+    版本差異只發生在「產品如何解讀」，由測試以**內容比對（容忍前導空白）**斷言產品異常路徑穩健還原。
+    """
+    name, sep, value = line.partition(":")
+    if not sep or not value.strip():
+        return line  # 無值（如空主旨）→ 不折
+    return f"{name}:\r\n {value.strip()}"  # 值整段移到續行（續行以折疊空白起始）
+
+
+def _render_header_literal(m: "SimMessage", section: str, *, malformed_fold: bool = False) -> bytes:
     """產生 ``BODY[HEADER.FIELDS (...)]`` 的 literal：依索取欄位輸出、結尾空行（單一可信來源）。
 
     非 ASCII 值逐詞以 RFC 2047 encoded-word 編碼（真實郵件即如此存放，非裸 UTF-8）；長表頭折行
     （驅動產品 ``_unfold``）。皆確保產品端解碼路徑被真實位元組流驅動；空值欄位（如空主旨）略過。
+
+    ``malformed_fold=True``（確定性異常注入）：改用 :func:`_fold_header_line_noncompliant`——欄名後
+    立即折行、值落在續行，用以驗證產品對不合規折行的異常處理路徑能否穩健還原內容。
     """
+    folder = _fold_header_line_noncompliant if malformed_fold else _fold_header_line
     fm = re.search(r"HEADER\.FIELDS\s*\(([^)]*)\)", section, re.IGNORECASE)
     names = fm.group(1).split() if fm else list(m.fields.keys())
     lines = []
@@ -224,5 +242,5 @@ def _render_header_literal(m: "SimMessage", section: str) -> bytes:
         key = raw.upper()
         if key in m.fields and m.fields[key]:
             title = _HEADER_TITLE.get(key, raw)
-            lines.append(_fold_header_line(f"{title}: {_encode_header_value(m.fields[key])}"))
+            lines.append(folder(f"{title}: {_encode_header_value(m.fields[key])}"))
     return ("\r\n".join(lines) + "\r\n\r\n").encode("utf-8")

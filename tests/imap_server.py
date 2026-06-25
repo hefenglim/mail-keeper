@@ -108,6 +108,7 @@ class ImapServer:
         max_connections: Optional[int] = None,
         greeting_mode: str = "ok",
         supports_condstore: bool = False,
+        malformed_fold: bool = False,
     ) -> None:
         self.mailboxes: dict[str, list[SimMessage]] = {
             k: list(v) for k, v in (mailboxes or {"INBOX": []}).items()
@@ -122,6 +123,7 @@ class ImapServer:
         self._greeting_mode = greeting_mode           # P9：'ok'/'preauth'/'no_caps' 招呼變體
         self._supports_condstore = supports_condstore  # P11：CONDSTORE（SELECT 報 HIGHESTMODSEQ、FETCH 可索取 MODSEQ）
         self._highest_modseq = 1                       # P11：CONDSTORE 模擬用
+        self._malformed_fold = malformed_fold          # 確定性異常注入：表頭不合規折行（值落續行）
         self._uidnext: dict[str, int] = {
             name: (max((m.uid for m in msgs), default=0) + 1)
             for name, msgs in self.mailboxes.items()
@@ -890,7 +892,7 @@ class ImapServer:
         raw = getattr(m, "raw", None)
         if raw is not None:
             return raw
-        return _render_header_literal(m, "HEADER")  # 無 HEADER.FIELDS(...) → 輸出全部欄位
+        return _render_header_literal(m, "HEADER", malformed_fold=self._malformed_fold)  # 無 HEADER.FIELDS(...) → 全欄位
 
     def _body_section(self, section: str) -> Callable[[SimMessage], bytes]:
         """回傳 ``BODY[<section>]`` 的 literal 渲染函式。"""
@@ -905,7 +907,7 @@ class ImapServer:
             return text_body
 
         def header_section(m: SimMessage) -> bytes:               # HEADER / HEADER.FIELDS(...)
-            return _render_header_literal(m, section)
+            return _render_header_literal(m, section, malformed_fold=self._malformed_fold)
         return header_section
 
     def _bodystructure(self, m: SimMessage) -> str:

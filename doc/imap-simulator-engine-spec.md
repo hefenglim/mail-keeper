@@ -217,8 +217,23 @@ R7-followup C1/C2）分流。每項皆遵守 §5 鐵則 + §9 對拍。
 - ✅ **P10 畸形/亂序 tagged 行**：`arm_unsolicited` 注入非預期 tagged 行 → 真 imaplib **受控 abort**
   （非靜默誤判——證明協定健壯）。
 - ✅ **P11 STATUS / NAMESPACE / LSUB + CONDSTORE**：新增三命令；`supports_condstore=True` → SELECT 報
-  `[HIGHESTMODSEQ]`、FETCH 支援 `MODSEQ`。（COMPRESS/STARTTLS 因 stdlib imaplib 無對應、產品走 SSL+XOAUTH2，
+  `[HIGHESTMODSEQ]`、FETCH 支援 `MODSEQ`。（COMPRESS/STARTTLS 因 stdlib imaplib 無對應、產品走 SSL+XOAUTH2,
   刻意不納入。）
+
+### 7.3 後續硬化（CI 矩陣揭露 → 根因修正 + 確定性異常注入）
+
+GitHub CI 的多版本矩陣（3.10 + 3.13）揭露一個**版本依賴的折行保真 bug**：舊 `_fold_header_line` 把
+無內部空白的長 token 折在欄名後（值落續行），而 `email` 跨 Python 版本對續行前導折疊空白處理不一
+（3.10 保留、3.12 去除）。處置分兩面：
+
+- ✅ **根因修正（保真）**：`_fold_header_line` 改為 RFC 5322 §2.2.3 保真——只在**值內既有空白**折行，
+  單一無空白 token 不可折、絕不在欄名後立即折。預設折行因此**版本無關**。
+- ✅ **確定性異常注入（B3 擴充）**：把「不合規折行」正式化為可控情景 `ImapServer(malformed_fold=True)`
+  （`_fold_header_line_noncompliant`：欄名後立即折、值落續行）。引擎吐的 bytes **確定**（版本無關）；
+  版本差異只發生在「產品如何解讀」，故測試以**內容比對（容忍前導空白）** 斷言產品異常路徑穩健還原
+  （`test_imap_server_faults.py` 的 `test_malformed_fold_*`）。
+  教訓：`本機綠 ≠ 矩陣綠`——版本依賴的執行期行為靠單版本 code-review/SR 結構上抓不到，多版本 CI 是
+  其專屬防線；異常情景一律以**引擎確定性 bytes + 版本無關斷言**設計。
 
 ---
 

@@ -266,3 +266,30 @@ def test_assert_sequence_retry_then_success(monkeypatch):
         str(INBOX_NEWSLETTER_UID), "Archive", "INBOX"
     )
     server.assert_sequence(["AUTHENTICATE", "AUTHENTICATE", ("UID MOVE", "OK")])
+
+
+# ── 確定性異常注入：不合規折行 ───────────────────────────────────────────────
+# 背景：CI(3.10) 揭露舊折行把無空白長 token 折在欄名後 → 值落續行 → email 跨版本對前導折疊空白
+# 處理不一。預設折行已修為 RFC 5322 保真；此處把「不合規折行」正式化為**確定性異常注入**，
+# 用以驗證產品異常路徑能否穩健還原內容。確定性在引擎吐的 bytes（版本無關）；版本差異只在「產品
+# 如何解讀」，故以內容比對（容忍前導空白）斷言。
+
+def test_malformed_fold_emits_deterministic_noncompliant_wire():
+    # 引擎確定性吐出不合規折行 bytes（欄名後立即折、值在續行）——無論 Python 版本皆同
+    server = ImapServer({"INBOX": [message(10, "Quarterly Report")]}, malformed_fold=True)
+    m = _imap_over(server)
+    m.select("INBOX", readonly=True)
+    literal = m.uid("fetch", "10", "(BODY.PEEK[HEADER.FIELDS (SUBJECT)])")[1][0][1]
+    assert b"Subject:\r\n Quarterly Report" in literal           # 確定性：值整段在續行
+
+
+def test_malformed_fold_product_recovers_content_version_independent(monkeypatch):
+    # 產品異常路徑：對不合規折行仍穩健還原內容、不崩潰；斷言以內容比對 → 版本無關
+    server = ImapServer(
+        {"INBOX": [message(10, "Quarterly Report", "boss@x.com", "me@x.com", "Mon")]},
+        malformed_fold=True,
+    )
+    headers = connected_client(monkeypatch, server).list_headers("INBOX")
+    assert len(headers) == 1 and headers[0].uid == "10"
+    assert headers[0].subject.strip() == "Quarterly Report"      # 內容正確還原（前導空白為異常輸入附帶物）
+    assert headers[0].sender.strip() == "boss@x.com"
