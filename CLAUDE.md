@@ -167,5 +167,5 @@ Full steps in `MailKeeper-Handoff.html` and `README.md`.
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/007-bulk-move-efficiency/plan.md
+at specs/008-bulk-fetch-resilience/plan.md
 <!-- SPECKIT END -->
