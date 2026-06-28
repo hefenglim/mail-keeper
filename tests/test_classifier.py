@@ -78,8 +78,8 @@ def test_execute_fetches_source_once_per_folder(folder_backend, monkeypatch):
     assert calls.count("INBOX") == 1
 
 
-def test_execute_aborts_after_consecutive_failures(make_backend, monkeypatch):
-    # C：連續多筆失敗（疑似連線中斷）→ 提前停止，不對死連線狂試 25 次
+def test_execute_stops_on_connection_level_failure(make_backend, monkeypatch):
+    # feature 007：早停改連線層級——move_many 因重連用盡而拋出 → execute 停止、回傳已處理
     headers = [MailHeader(str(i), "S", "a@x", "d") for i in range(1, 6)]  # INBOX 5 封
     backend = make_backend(folders={"INBOX": headers, "Work": []})
     items = classifier.build_report(backend, _rows(*[(str(i), "INBOX", "Work") for i in range(1, 6)]))
@@ -87,10 +87,10 @@ def test_execute_aborts_after_consecutive_failures(make_backend, monkeypatch):
     def boom(*a, **k):
         raise OSError("EOF occurred in violation of protocol")
 
-    monkeypatch.setattr(backend, "move", boom)
+    monkeypatch.setattr(backend, "move_many", boom)
     results = classifier.execute(backend, items)
-    assert len(results) == 3 and all(not r.ok for r in results)  # 停在第 3 次連續失敗
-    assert len(classifier.candidates(items)) == 5  # 仍有 2 筆未嘗試
+    assert results == []  # 第一群（同 INBOX→Work）即連線層級失敗 → 停止、無已處理
+    assert len(classifier.candidates(items)) == 5  # 5 筆未完成（由 cli 回報剩餘）
 
 
 def test_new_folders_lists_to_be_created(folder_backend):
@@ -108,14 +108,15 @@ def test_execute_reports_progress(folder_backend):
     assert seen == [(1, 2), (2, 2)]  # 2 候選 → 逐封回報 done/total
 
 
-def test_execute_threshold_configurable(make_backend, monkeypatch):
-    # US3：連續失敗門檻可由參數調整（cli 由 config 帶入）。預設 3，這裡設 2 → 停在第 2 次。
+def test_execute_max_consecutive_failures_is_inert(make_backend, monkeypatch):
+    # feature 007：max_consecutive_failures 已停用（保留參數向後相容）；資料失敗不早停、不論其值
     headers = [MailHeader(str(i), "S", "a@x", "d") for i in range(1, 6)]
     backend = make_backend(folders={"INBOX": headers, "Work": []})
     items = classifier.build_report(backend, _rows(*[(str(i), "INBOX", "Work") for i in range(1, 6)]))
-    monkeypatch.setattr(backend, "move", lambda *a, **k: (_ for _ in ()).throw(OSError("x")))
-    results = classifier.execute(backend, items, max_consecutive_failures=2)
-    assert len(results) == 2  # 門檻=2 → 停在第 2 次連續失敗
+    # move_many 回每封資料層錯誤（非連線層級例外）→ 全部如實回報、不早停
+    monkeypatch.setattr(backend, "move_many", lambda uids, d, m="INBOX": {u: "boom" for u in uids})
+    results = classifier.execute(backend, items, max_consecutive_failures=1)
+    assert len(results) == 5 and all(not r.ok for r in results)  # 全部處理（門檻無效）
 
 
 def test_execute_stale_uid_reported_as_failure(folder_backend):
@@ -157,6 +158,35 @@ def test_build_report_preserves_worksheet_row_order(folder_backend):
     rows = _rows(("11", "INBOX", "Archive"), ("10", "INBOX", "Work"), ("99", "INBOX", "Work"))
     items = classifier.build_report(folder_backend, rows)
     assert [it.row.uid for it in items] == ["11", "10", "99"]
+
+
+def test_execute_groups_by_source_then_target_csv_output(make_backend):
+    # feature 007 (P4)：交錯來源夾 → 同夾相鄰處理；MoveResult 依原 CSV 列序
+    backend = make_backend(folders={
+        "INBOX": [MailHeader("1", "s", "a", "d"), MailHeader("3", "s", "a", "d")],
+        "Promo": [MailHeader("2", "s", "a", "d"), MailHeader("4", "s", "a", "d")],
+        "A": [], "B": [],
+    })
+    rows = _rows(("1", "INBOX", "A"), ("2", "Promo", "B"), ("3", "INBOX", "A"), ("4", "Promo", "B"))
+    items = classifier.build_report(backend, rows)
+    results = classifier.execute(backend, items)
+    assert [r.row.uid for r in results] == ["1", "2", "3", "4"]   # 輸出依 CSV 列序
+    assert all(r.ok for r in results)
+    moved = [a[1] for a in backend.actions if a[0] == "move"]
+    assert moved == ["1", "3", "2", "4"]                          # 處理依分組（INBOX 群先、Promo 群後）
+
+
+def test_execute_data_failure_does_not_stop_remaining(make_backend, monkeypatch):
+    # feature 007 (SC-010)：單列資料失敗不早停、其餘仍處理；逐封歸因
+    backend = make_backend(folders={"INBOX": [MailHeader(str(i), "s", "a", "d") for i in (1, 2, 3)], "Work": []})
+    items = classifier.build_report(backend, _rows(("1", "INBOX", "Work"), ("2", "INBOX", "Work"), ("3", "INBOX", "Work")))
+    monkeypatch.setattr(
+        backend, "move_many", lambda uids, d, m="INBOX": {u: ("boom" if u == "2" else None) for u in uids}
+    )
+    results = classifier.execute(backend, items)
+    assert len(results) == 3                          # 全部處理
+    assert [r.ok for r in results] == [True, False, True]
+    assert results[1].error == "boom"
 
 
 def test_build_report_threads_progress_to_list_uids(folder_backend, monkeypatch):

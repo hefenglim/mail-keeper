@@ -105,7 +105,7 @@ def test_classify_completes_through_token_expiry(monkeypatch):
     server = fresh_server()
     _no_sleep(monkeypatch)
     client = connected_client(monkeypatch, server, token_provider=lambda: "tok")
-    server.arm_expiry(before_op="move", nth=2)  # 第 2 次搬移時 token 過期（EOF）
+    server.arm_expiry(before_op="move", nth=1)  # 批次搬移時 token 過期（EOF）→ 透明重連續完
     rows = _rows(
         (str(INBOX_NEWSLETTER_UID), "INBOX", "Archive"),
         (str(INBOX_CJK_UID), "INBOX", "Archive"),

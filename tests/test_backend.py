@@ -71,6 +71,13 @@ def test_fake_list_uids_returns_set_and_reports_progress(folder_backend):
     assert seen == [(1, 2), (2, 2)]  # 逐筆推進至 total
 
 
+def test_fake_move_many_per_uid_results(folder_backend):
+    # feature 007：FakeBackend.move_many 回 {uid: None/錯誤}；present 者搬移
+    out = folder_backend.move_many(["10", "11"], "Work", "INBOX")
+    assert out == {"10": None, "11": None}
+    assert {"10", "11"} <= {h.uid for h in folder_backend.list_headers("Work")}
+
+
 # --- UID 抽取（純函式）。list_headers 解析的整合測試見 test_imap_contract.py ---
 
 @pytest.mark.parametrize(

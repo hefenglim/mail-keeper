@@ -29,3 +29,6 @@ MAX_RECONNECT_ATTEMPTS = 3     # 單一中斷事件最多重連次數
 MAX_RETRIES_PER_OP = 2         # 單一操作重連後最多重試次數（保留給細粒度重試）
 BACKOFF_BASE_SECONDS = 0.5     # 指數退避起點秒數
 BACKOFF_CAP_SECONDS = 8.0      # 指數退避封頂上限秒數（不超過此值）
+
+# ── feature 007：批次搬移上限（程式內固定、不開放設定；可調批量屬延後的 P6）──
+MOVE_BATCH_MAX = 200           # 同 (來源→目標) 群一次 UID MOVE 的最大封數，超過則分塊
