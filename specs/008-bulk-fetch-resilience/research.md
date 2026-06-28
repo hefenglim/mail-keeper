@@ -24,7 +24,7 @@
 
 ## D4 — 驗證取向（測請求端 + log）
 
-- **續傳不整批重抓**：`arm_expiry(before_op="fetch", nth=k, mode="eof")` + `token_provider`，讀 N 封 → `command_counts["UID FETCH"]` ≈ ⌈N/批⌉（**不翻倍**；容許失敗那批的 1 次重試）、`redundant_full_folder_reads=={}`、最終 headers 數=N、UID 全非空、無重複、`assert_all_fetches_request_uid()`。
+- **續傳不整批重抓**：`arm_expiry(before_op="fetch", nth=k, mode="eof")` + `token_provider`，讀 N 封 → `command_count("UID FETCH")` ≤ ⌈N/批⌉ + 1（**不翻倍**；+1 容許失敗那批重試一次）、最終 headers 數=N、UID 全非空、無重複、`assert_all_fetches_request_uid()`。註：不用 `redundant_full_folder_reads==​{}`——引擎將「任一夾 >1 次 FETCH」即視為冗餘，對正常多批讀取恆為真，非「續傳重抓」的有效指標。
 - **UIDVALIDITY 變更**：讀到一半 `set_uidvalidity(folder, new)` + 注入斷線 → 重連後偵測變更 → 重抓 → 結果正確（不沿用過時 UID）。
 - **批量**：`config_store` 單元測試（預設/無效/下限）；引擎驗 `fetch_batch_size=M` → FETCH 次數=⌈N/M⌉。
 - **解析等價**：`list_headers` 對母版 → 主旨/寄件者等與優化前逐字一致。

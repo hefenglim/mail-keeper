@@ -12,7 +12,7 @@ pip install -e ".[test]"
 ### V1 — 重連後續抓、不整批重抓（SC-001）｜US1
 - **Given**：`bulk_server(n)`、`fetch_batch_size` 使 ≥2 批；`arm_expiry(before_op="fetch", nth=2, mode="eof")` + `token_provider`。
 - **When**：`client.list_headers("INBOX", on_progress=...)`。
-- **Then**：`command_counts["UID FETCH"]` ≈ ⌈n/批⌉（不翻倍）、`redundant_full_folder_reads=={}`；回 n 筆、UID 全非空、無重複/遺漏；`assert_all_fetches_request_uid()`；`authentications>=2`。
+- **Then**：`command_count("UID FETCH")` ≤ ⌈n/批⌉ + 1（不翻倍）；回 n 筆、UID 全非空、無重複/遺漏；`assert_all_fetches_request_uid()`；`authentications>=2`。
 
 ### V2 — UIDVALIDITY 變更安全重抓（SC-002）｜US1
 - **Given**：讀到一半（注入斷線）期間 `set_uidvalidity("INBOX", new)`。

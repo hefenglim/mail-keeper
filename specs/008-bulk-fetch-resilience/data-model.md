@@ -13,7 +13,7 @@
 - `collected: dict[str, MailHeader]`：本次讀取「已取得標頭」的 uid→header；跨重連保留。
 - `all_uids: list[str]`：目前該夾現存 UID（每輪 `SEARCH ALL` 取得）；`remaining = [u for u in all_uids if u not in collected]`。
 - `uidvalidity`：上次見到的 UIDVALIDITY；變更 → `collected.clear()` 整批重抓。
-- **不變式**：`len(collected)` 單調遞增（進度延續）；最終回傳 `[collected[u] for u in all_uids]`（SEARCH 序）、UID 全非空、無重複、無遺漏。
+- **不變式**：同一 UIDVALIDITY 下 `len(collected)` 單調遞增（進度延續）；**UIDVALIDITY 變更時 `collected.clear()` 重抓、進度歸零為允許例外**。最終回傳 `[collected[u] for u in all_uids]`（SEARCH 序）、UID 全非空、無重複、無遺漏。
 
 ### Fetch Batch Size（每批讀取封數設定）
 - 來源：`config.json` 可選鍵 `fetch_batch_size`。
