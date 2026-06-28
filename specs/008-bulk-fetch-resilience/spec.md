@@ -10,6 +10,14 @@
 
 > 對應 `doc/mailkeeper-performance-report-20260627.html` 的 **P5 / P6 / P7**。分類路徑（006/007）不在本期。backlog C3 不在本期。
 
+## Clarifications
+
+### Session 2026-06-29
+
+- Q: P5 重連後「從中斷處續抓」與 UIDVALIDITY 變更怎麼做？ → A: **重連後重新 `SEARCH ALL` 取現存 UID，與「已取得 UID 集合」取差集、只抓差集**（UID 為鍵、穩健）；**UIDVALIDITY 變更則捨棄進度、整批重抓**。
+- Q: P6 FETCH 批量 config 鍵名/預設/界限？ → A: config.json 可選鍵 **`fetch_batch_size`，預設 50（沿用現行）、下限 1**；無效/缺漏 → 退預設、不崩潰。
+- Q: P5 進度跨重連怎麼表現？ → A: **延續（已完成數不歸零）**，與「不中斷」觀感一致。
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - 大型信箱讀取於中斷後從中斷處續完（Priority: P1）
@@ -71,13 +79,13 @@
 
 ### Functional Requirements
 
-- **FR-001**: `list_headers`（匯出/列標題用）於連線中斷／重連後 MUST 從中斷處續抓——只取尚未取得的郵件標頭，MUST NOT 重抓已取得的批次。
+- **FR-001**: `list_headers`（匯出/列標題用）於連線中斷／重連後 MUST 從中斷處續抓——重連後 MUST 重新取得該夾現存 UID 清單，與「已取得 UID 集合」取差集、**只抓差集**，MUST NOT 重抓已取得的批次。
 - **FR-002**: 重連後若來源資料夾 UIDVALIDITY 變更，系統 MUST 安全地重新抓取（捨棄過時進度、不沿用過時 UID），不得產生錯亂或不完整結果。
 - **FR-003**: 續抓後最終標頭集合 MUST 完整、每筆 UID 非空、無重複、無遺漏，與「全程不中斷」取得者等價。
-- **FR-004**: 每批 FETCH 的封數 MUST 可由 config.json 設定；無效／缺漏值 MUST 退回安全預設、永不崩潰（比照 feature 005 韌性設定的解析）。
+- **FR-004**: 每批 FETCH 的封數 MUST 可由 config.json 的 `fetch_batch_size` 設定（預設 **50**、下限 **1**）；無效／缺漏／越界值 MUST 退回安全預設、永不崩潰（比照 feature 005 韌性設定的解析）。
 - **FR-005**: 讀標頭 MUST 以「只解析表頭」的輕量路徑處理；輸出的 `MailHeader` 各欄位（含編碼解碼）MUST 與優化前逐字一致。
 - **FR-006**: 匯出工作表、列出標題、以及任何依賴 `list_headers` 的路徑，其輸出 MUST 與優化前逐字一致；分類路徑（006/007）MUST NOT 受影響。
-- **FR-007**: 讀取全程（含恢復／重連期間）MUST 持續顯示進度，進度回報語意不退化。
+- **FR-007**: 讀取全程（含恢復／重連期間）MUST 持續顯示進度，進度回報語意不退化；進度跨重連 MUST **延續**（已完成數不歸零、不倒退）。
 - **FR-008**: 續抓、批量、解析等 IMAP/協定細節 MUST 僅存在於 `imap_client.py`；上層（cli/organizer）MUST NOT 特例化任一後端、MUST NOT 讓協定細節跨越後端邊界。
 - **FR-009**: 本變更 MUST NOT 記錄或輸出任何存取權杖／祕密；唯讀讀取路徑 MUST 維持破壞性動作的 dry-run 預設不變。
 
@@ -99,10 +107,10 @@
 
 ## Assumptions
 
-- 續傳以「重連後重新取得該夾現存 UID 清單，與『已取得 UID 集合』取差集，只抓差集」實現（過渡決策；確切粒度／是否以游標推進於 `/speckit.clarify` 細化）。
-- 每批封數的 config 鍵名／安全預設（沿用現行 50）／界限（如下限 1）為過渡值，於 `/speckit.clarify` 確認。
-- 進度跨重連延續（已完成數不歸零）。
-- UIDVALIDITY 變更以 SELECT 回應的 UIDVALIDITY 偵測；變更即重抓。
+- 續傳以「重連後重新 `SEARCH ALL` 取現存 UID，與『已取得 UID 集合』取差集、只抓差集」實現（Clarify 已確認）。
+- 每批封數 config 鍵 `fetch_batch_size`、預設 50、下限 1（Clarify 已確認；無效/缺漏/越界退預設）。
+- 進度跨重連延續（已完成數不歸零）（Clarify 已確認）。
+- UIDVALIDITY 變更以 SELECT 回應的 UIDVALIDITY 偵測；變更即捨棄進度整批重抓。
 - 本期僅動唯讀讀取路徑（`list_headers`）；不改分類/搬移、dry-run 預設、OAuth；不含 backlog C3。
 
 ## Dependencies
