@@ -65,6 +65,14 @@ class FakeBackend:
                 on_progress(i, total)
         return items
 
+    def list_uids(self, folder: str = "INBOX", *, on_progress=None) -> set[str]:
+        items = list(self._folders.get(folder, []))
+        total = len(items)
+        for i, _h in enumerate(items, 1):
+            if on_progress is not None:
+                on_progress(i, total)
+        return {h.uid for h in items}
+
     def list_inbox_headers(self, mailbox: str = "INBOX") -> list[MailHeader]:
         return self.list_headers(mailbox)
 

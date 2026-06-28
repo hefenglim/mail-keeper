@@ -342,6 +342,33 @@ class OutlookIMAPClient:
         """相容保留：等同 list_headers(mailbox)。"""
         return self.list_headers(mailbox)
 
+    def list_uids(
+        self, folder: str = "INBOX", *, on_progress: Callable[[int, int], None] | None = None
+    ) -> set[str]:
+        """讀取指定資料夾現存所有郵件的 UID 集合（只查 UID、**不抓標頭內容**）。
+
+        供分類存在性檢查：一次 `UID SEARCH ALL` 取代整夾標頭 FETCH（大幅減往返/流量）。
+        「現存」語意與 `list_headers` 一致——涵蓋信箱中尚未 expunge 的所有郵件（含已標
+        `\\Deleted`）。連線中斷會透明重連並重查（唯讀、重跑安全）。逐筆回報進度
+        `on_progress(done, total)`（total = 該夾郵件數），使大信箱不像當機。
+        """
+        return self._with_reconnect(lambda: self._list_uids_impl(folder, on_progress=on_progress))
+
+    def _list_uids_impl(
+        self, folder: str = "INBOX", *, on_progress: Callable[[int, int], None] | None = None
+    ) -> set[str]:
+        self._conn.select(folder, readonly=True)
+        typ, data = self._conn.uid("search", None, "ALL")  # type: ignore[arg-type]  # IMAP SEARCH 允許 charset=None
+        if typ != "OK" or not data or data[0] is None:
+            return set()
+        uids = [u.decode() for u in data[0].split()]
+        total = len(uids)
+        # determinate 進度：以該夾郵件數為總數推進至完成（單次往返、不注入人工延遲）
+        if on_progress is not None:
+            for done in range(1, total + 1):
+                on_progress(done, total)
+        return set(uids)
+
     # ---------- 整理動作 ----------
     def ensure_folder(self, folder: str) -> None:
         """確保資料夾存在 (已存在會回 NO，直接忽略即可)。"""

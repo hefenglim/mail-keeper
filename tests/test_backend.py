@@ -63,6 +63,14 @@ def test_fake_list_headers_reports_progress(folder_backend):
     assert seen == [(1, 2), (2, 2)]  # INBOX 有 2 封 → 逐封回報 done/total
 
 
+def test_fake_list_uids_returns_set_and_reports_progress(folder_backend):
+    # feature 006：FakeBackend.list_uids 回 UID 集合並驅動 determinate 進度
+    seen: list[tuple[int, int]] = []
+    uids = folder_backend.list_uids("INBOX", on_progress=lambda d, t: seen.append((d, t)))
+    assert uids == {"10", "11"}      # INBOX 兩封
+    assert seen == [(1, 2), (2, 2)]  # 逐筆推進至 total
+
+
 # --- UID 抽取（純函式）。list_headers 解析的整合測試見 test_imap_contract.py ---
 
 @pytest.mark.parametrize(

@@ -71,11 +71,12 @@ def _folders(backend: MailBackend, cache: ClassifyCache) -> set[str]:
 def _source_uids(
     backend: MailBackend, folder: str, cache: ClassifyCache, make: ReporterFactory
 ) -> set[str]:
-    """來源夾現存 UID 集合：每夾只抓一次並快取（顯示進度）。不吞例外——來源夾存在卻
+    """來源夾現存 UID 集合：每夾只查一次並快取（顯示進度）。只取 UID、**不抓標頭內容**
+    （P1：以 ``list_uids`` 取代整夾標頭 FETCH，大幅減往返/流量）。不吞例外——來源夾存在卻
     讀取失敗（連線中斷/逾時）應如實往外傳，而非把列誤標為不可行而遮蔽連線錯誤。"""
     if folder not in cache.source_uids:
-        with make(f"讀取「{folder}」標頭") as cb:
-            cache.source_uids[folder] = {h.uid for h in backend.list_headers(folder, on_progress=cb)}
+        with make(f"檢查「{folder}」現存郵件") as cb:
+            cache.source_uids[folder] = backend.list_uids(folder, on_progress=cb)
     return cache.source_uids[folder]
 
 

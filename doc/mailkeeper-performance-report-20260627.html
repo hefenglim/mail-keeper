@@ -97,7 +97,7 @@
   <p class="sub">P1–P7 精緻解說 · 情景演示 · 前後對比圖 · 量化效果 &nbsp;|&nbsp; 基於知識圖譜熱點 + 實際讀碼 + IMAP 模擬器實測，非臆測</p>
   <p class="sub">
     <span class="pill">評估日期：2026-06-27</span>
-    <span class="pill">最後更新：2026-06-28（加入實測基準＋狀態追蹤）</span>
+    <span class="pill">最後更新：2026-06-28（P1 已完成 v0.6.1 · feature 006）</span>
     <span class="pill">適用版本基準：v0.6.0</span>
     <span class="pill">文件性質：living doc（完成優化須回填狀態與版本號）</span>
   </p>
@@ -198,8 +198,8 @@
   </div>
   <table>
     <tr><th style="width:46px">項目</th><th>名稱</th><th style="width:88px">影響</th><th style="width:110px">狀態</th><th style="width:96px">完成版本</th><th>對應 feature / 備註</th></tr>
-    <tr><td><b style="color:var(--p4)">P4</b></td><td>候選分組排序（前置乘數）</td><td>放大器</td><td>🔲 未實作</td><td>—</td><td>建議與 P1 同一 feature（即將草擬 spec）</td></tr>
-    <tr><td><b style="color:var(--p1)">P1</b></td><td>存在性檢查改 UID SEARCH（不抓全表頭）</td><td>最高</td><td>🔲 未實作</td><td>—</td><td>即將草擬 <code>/speckit.specify</code>（P4+P1）</td></tr>
+    <tr><td><b style="color:var(--p1)">P1</b></td><td>存在性檢查改 UID SEARCH（不抓全表頭）</td><td>最高</td><td>✅ 已完成</td><td><b>v0.6.1</b></td><td>feature 006（<code>list_uids</code>）；報告階段整夾 FETCH=0、下載降 ≥90%</td></tr>
+    <tr><td><b style="color:var(--p4)">P4</b></td><td>候選分組排序（前置乘數）</td><td>放大器</td><td>🔲 未實作</td><td>—</td><td>延至 P2/P3（feature 006 已決議延後：move 路徑未改前無往返效益）</td></tr>
     <tr><td><b style="color:var(--p3)">P3</b></td><td>免重複 SELECT（<code>_ensure_selected</code>）</td><td>中</td><td>🔲 未實作</td><td>—</td><td>= backlog <b>C2</b>；動搬移路徑建議併 C1</td></tr>
     <tr><td><b style="color:var(--p2)">P2</b></td><td>批次 UID MOVE</td><td>高</td><td>🔲 未實作</td><td>—</td><td>與 backlog <b>C1</b>（fallback 冪等性）一起設計</td></tr>
     <tr><td><b style="color:var(--p5)">P5</b></td><td>重連可續傳（不整夾重抓）</td><td>中</td><td>🔲 未實作</td><td>—</td><td>主要利匯出大信箱</td></tr>
@@ -214,6 +214,7 @@
       <span class="tag" style="background:var(--p1)">P1</span>
       <span class="ttl">分類存在性檢查「過度抓取」整封標頭</span>
       <span class="meta">
+        <span class="badge" style="color:#7ef0b6;border-color:#27543a">✅ 已於 v0.6.1 完成（feature 006）</span>
         <span class="badge new">新發現</span>
         <span class="badge">影響：最高</span>
         <span class="badge">工：中</span>
@@ -534,6 +535,7 @@ After :  批1 ✓ 批2 ✓ … 批199 ✓  ← 斷線  重連後 → <span style
     <tr><th style="width:110px">日期</th><th style="width:90px">版本基準</th><th>變更</th></tr>
     <tr><td>2026-06-27</td><td>v0.6.0</td><td>首次評估：P1–P7 解說、情景演示、前後對比圖（往返數為估計值）。</td></tr>
     <tr><td>2026-06-28</td><td>v0.6.0</td><td>加入 <b>IMAP 模擬器實測基準</b>（分類 1,205 往返／200 FETCH／499 redundant SELECT／500 MOVE／下傳 1.63MB；匯出 204）、<b>狀態追蹤表</b>＋維護準則、修訂紀錄。實測證實估計方向正確。</td></tr>
+    <tr><td>2026-06-28</td><td><b>v0.6.1</b></td><td><b>P1 落地</b>（feature 006）：分類存在性檢查改 <code>list_uids</code>（<code>UID SEARCH ALL</code>，含已標刪），報告階段整夾標頭 FETCH=0、下載降 ≥90%、判定/搬移等價現況；狀態表 P1→✅ 已完成。P4 確認延至 P2/P3。</td></tr>
   </table>
 
   <div class="foot">

@@ -134,9 +134,10 @@ def test_classify_reads_each_source_folder_once_via_log(monkeypatch):
     )
     items = classifier.build_report(client, rows, cache=cache)
     classifier.execute(client, items, cache=cache)
-    # 指令日誌效率斷言：INBOX 整夾標頭 fetch 只一次（報告讀、執行重用、不二次掃描）
-    assert server.command_count("UID FETCH") == 1
-    assert server.fetch_count("INBOX") == 1
+    # 指令日誌效率斷言（P1）：存在性改 UID SEARCH——INBOX 現存查詢只一次、零整夾標頭 FETCH
+    assert server.command_count("UID FETCH") == 0       # 不再抓整夾標頭
+    assert server.command_count("UID SEARCH") == 1      # INBOX 現存查詢只一次（報告讀、執行重用、不二次掃描）
+    assert server.fetch_count("INBOX") == 0
     # 資料夾清單只讀一次（report/new_folders/execute 共用快取）
     assert server.command_count("LIST") == 1
 
