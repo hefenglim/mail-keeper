@@ -35,13 +35,17 @@ def move_many(
 
 ## 後備搬移冪等（C1，`_move_impl` 後備路徑）
 
-重試前依該 uid 狀態決定（FR-006）：
-| 來源狀態 | 動作 |
+重試前依序判定（FR-006；僅看來源 `\Deleted` 不足以涵蓋「COPY 後、標刪前」窗口，故以目標 Message-ID 去重）：
+| 判定 | 動作 |
 |---|---|
-| uid 已不在來源 | 視為已完成 → 成功返回（no-op） |
-| uid 在、已標 `\Deleted` | 跳過 COPY，只補 `UID EXPUNGE`（無 UIDPLUS 才整夾 EXPUNGE） |
-| uid 在、未標 `\Deleted` | COPY → 標刪 → `UID EXPUNGE` |
+| uid 已不在來源 | 視為已完整搬走 → 成功返回（no-op，快路徑） |
+| uid 在 + 目標夾已有此 `Message-ID` | 前次已 COPY → 跳過 COPY，確保來源標 `\Deleted` + `UID EXPUNGE` |
+| uid 在 + 目標夾無此 `Message-ID` | COPY → 標刪 → `UID EXPUNGE` |
+| 郵件無 `Message-ID`（罕見） | 退回盡力 COPY（已知殘留、文件標註） |
+
+### 引擎前置（§7）
+- 母版郵件帶 `Message-ID` 表頭；引擎 `_search_match` 支援 `HEADER Message-ID <id>`（先加對拍真 imaplib 的保真案例，再寫產品測試）。
 
 ### 引擎斷言
-- `arm_expiry` 於「COPY 後、EXPUNGE 前」注入中斷 → 重連重試 → 目標夾複本數**正好 1**、來源正確移除、他人 `\Deleted` 不被波及。
+- `arm_expiry` 於「COPY 後、標刪/EXPUNGE 前」注入中斷 → 重連重試 → 目標夾該封複本數**正好 1**、來源正確移除、他人 `\Deleted` 不被波及。
 - feature 006 的 `test_fallback_move_idempotency_across_copy_known_limitation`（xfail strict=False）→ 修好後**自動 xpass、移除 marker**。

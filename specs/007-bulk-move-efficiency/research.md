@@ -23,13 +23,17 @@
 
 ## D4 — 後備搬移冪等（C1）
 
-- **Decision**: `_move_impl` 後備路徑（無 `UID MOVE`）改為：重試前先以該 UID 之 `UID SEARCH`／flags 判斷狀態——
-  1. **UID 已不在來源** → 前次已搬走，視為成功返回（no-op）。
-  2. **UID 仍在且已標 `\Deleted`** → 前次已 COPY（標刪在 COPY 後），**跳過 COPY**，只補 `UID EXPUNGE`（無則整夾 EXPUNGE 兜，但仍 UID 限定優先）。
-  3. **UID 仍在且未標 `\Deleted`** → 正常 COPY → 標刪 → UID EXPUNGE。
-- **Rationale**: 消除「COPY 成功後、EXPUNGE 前斷線重試 → 重做 COPY → 重複複本」。以 UID 狀態（穩定識別）判前次進度，毋需脆弱的 Message-ID 比對。
-- **Alternatives rejected**: 目標夾以 Message-ID 去重（需抓內容、跨夾比對，脆弱且昂貴）。
-- **驗證**: `arm_expiry(before_op="expunge"/"store", ...)` 於 COPY 後注入中斷 → 重連重試 → snapshot 目標夾複本數正好 1；feature 006 的 C1 xfail 測試自動 xpass、移除 marker。
+- **問題深掘（規劃時修正）**：僅看來源 `\Deleted` 旗標**不足以**涵蓋整個窗口——若於「COPY 成功後、標刪(store)前」斷線，重試時來源該 UID 仍在且**未**標 `\Deleted`，無法分辨「從未 copy」與「已 copy 但未標刪」→ 重試仍會重做 COPY → 重複複本。故穩健解需能偵測「目標夾是否已有此封」。
+- **Decision**: `_move_impl` 後備路徑（無 `UID MOVE`）重試前依序判定：
+  1. **UID 已不在來源** → 前次已完整搬走，視為成功返回（no-op，快路徑）。
+  2. **UID 仍在** → 取該封 `Message-ID`（來源仍在、可讀），在**目標夾**以 `UID SEARCH HEADER Message-ID <id>` 偵測是否已有此封：
+     - **已有** → 前次已 COPY，**跳過 COPY**；確保來源標 `\Deleted` + `UID EXPUNGE`。
+     - **沒有** → 正常 COPY → 標刪 → `UID EXPUNGE`。
+  3. 無 `Message-ID` 的郵件（罕見）→ 退回「盡力 COPY」（記錄為已知殘留、文件標註）。
+- **Rationale**: 目標夾以 `Message-ID`（RFC 5322 穩定唯一識別）去重，是**唯一能覆蓋整個 COPY-後窗口**的正確機制；來源狀態只能當「已完整搬走」的快路徑。COPY 本質非冪等（每次 append），無目標偵測無法避免重複。
+- **引擎前置（§7：先擴引擎再寫產品測試）**：母版郵件需帶 `Message-ID` 表頭；引擎 `_search_match` 需支援 `HEADER Message-ID <id>`（新增保真案例對拍真 imaplib）。
+- **Alternatives rejected**: 僅靠來源 `\Deleted` 旗標（不覆蓋 copy-before-store 子窗口）；客戶端持久化進度（重連重跑 lambda、無持久層）。
+- **驗證**: `arm_expiry` 於「COPY 後、標刪/expunge 前」注入中斷 → 重連重試 → snapshot 目標夾該封複本數**正好 1**；feature 006 的 C1 xfail 測試自動 xpass、移除 marker。
 
 ## D5 — 早停改連線層級（Clarify）
 
