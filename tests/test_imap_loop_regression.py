@@ -63,7 +63,8 @@ def test_full_simulation_regression_loop(monkeypatch):
     rep = server.loop_report()
     assert rep["authentications"] >= 2                                   # 中途重連
     assert rep["redundant_full_folder_reads"] == {}                      # 讀取迴圈零冗餘
-    assert rep["fetches_per_folder"] == {"INBOX": 1}                     # INBOX 整夾只抓一次（重連後重用 cache）
+    assert rep["fetches_per_folder"] == {}                               # P1：存在性改 UID SEARCH、零整夾標頭抓取
+    assert rep["command_counts"].get("UID SEARCH") == 1                  # INBOX 現存查詢一次（重連後重用 cache）
     assert rep["command_counts"]["UID MOVE"] == 4                        # 4 封各成功搬移（失敗的那次未記錄）
     server.assert_all_fetches_request_uid()
 
@@ -93,8 +94,9 @@ def test_bulk_classify_reads_each_source_folder_once(monkeypatch):
 
     rep = server.loop_report()
     # loop-regression 不變量（用 log 數據抓冗餘/回歸）：
-    assert rep["redundant_full_folder_reads"] == {}            # 整夾標頭零冗餘重抓
-    assert rep["fetches_per_folder"] == {"INBOX": 1}           # INBOX 整夾只抓一次（4 列共用快取）
+    assert rep["redundant_full_folder_reads"] == {}            # 零冗餘
+    assert rep["fetches_per_folder"] == {}                     # P1：存在性改 UID SEARCH、零整夾標頭抓取
+    assert rep["command_counts"].get("UID SEARCH") == 1       # INBOX 現存查詢只一次（4 列共用快取）
     assert rep["command_counts"].get("LIST") == 1             # 資料夾清單只讀一次
     assert rep["command_counts"].get("UID MOVE") == 4         # 四列各一次搬移
     server.assert_all_fetches_request_uid()                    # 每個 FETCH 都索取 UID
@@ -148,8 +150,8 @@ def test_redundant_refetch_would_be_caught_by_log(monkeypatch):
         cache=classifier.ClassifyCache(),                                     # cache B（不共用）
     )
     rep = server.loop_report()
-    assert rep["fetches_per_folder"]["INBOX"] >= 2                # 同夾被重抓
-    assert rep["redundant_full_folder_reads"]                     # 冗餘偵測點亮（守門有效）
+    # P1 後存在性走 UID SEARCH（非整夾 FETCH）：不共用快取 → 同夾被重複 SEARCH，log 仍可抓出冗餘
+    assert rep["command_counts"]["UID SEARCH"] >= 2               # 同夾現存查詢被重複執行
 
 
 def test_loop_report_exposes_valuable_log_data(monkeypatch):
@@ -168,3 +170,87 @@ def test_loop_report_exposes_valuable_log_data(monkeypatch):
     assert rep["authentications"] == 1 and rep["destructive_ops"] == 0  # 唯讀匯出：零破壞性
     d = server.dump()
     assert "structured log" in d and "snapshot" in d and "wire" in d
+
+
+# ── feature 006 (P1)：list_uids 存在性查詢——只查 UID、不抓整夾標頭 ──────────────
+
+def test_list_uids_uses_search_not_whole_folder_header_fetch(monkeypatch):
+    # P1/FR-001/SC-001：list_uids 只送 UID SEARCH ALL，完全不對整夾抓完整標頭
+    server = fresh_server()
+    client = connected_client(monkeypatch, server)
+    uids = client.list_uids("INBOX")
+    assert uids == {str(u) for u in range(101, 109)}            # 母版 INBOX 8 封
+    cc = server.loop_report()["command_counts"]
+    assert cc.get("UID SEARCH", 0) >= 1                          # 用 SEARCH 取得存在性
+    assert server.command_count("UID FETCH") == 0               # 完全不抓標頭
+
+
+def test_list_uids_includes_deleted_not_expunged(monkeypatch):
+    # Clarify Q1：已標 \Deleted 未 expunge 仍算「現存」（與現況 SEARCH ALL 一致）
+    server = fresh_server()
+    client = connected_client(monkeypatch, server)
+    assert str(INBOX_USER_DELETED_UID) in client.list_uids("INBOX")
+
+
+def test_list_uids_returns_empty_set_on_search_no(monkeypatch):
+    # 防禦分支（SR F1）：伺服器對 UID SEARCH 回 NO → list_uids 回空集合、不崩潰
+    server = fresh_server()
+    server.arm_response("search", typ="NO")
+    client = connected_client(monkeypatch, server)
+    assert client.list_uids("INBOX") == set()
+
+
+def test_list_uids_reconnects_and_returns_full_set(monkeypatch):
+    # FR-009：查詢期間連線中斷 → 透明重連後仍回完整集合、不遺漏
+    server = fresh_server()
+    _no_sleep(monkeypatch)
+    server.arm_expiry(before_op="search", nth=1, mode="eof")
+    client = connected_client(monkeypatch, server, token_provider=lambda: "tok")
+    uids = client.list_uids("INBOX")
+    assert uids == {str(u) for u in range(101, 109)}
+    assert server.loop_report()["authentications"] >= 2          # 中途重連發生
+
+
+def test_list_uids_downloads_far_less_than_list_headers(monkeypatch):
+    # SC-003：同夾 list_uids 的下行位元組遠低於 list_headers（整夾標頭）→ 降幅 ≥90%
+    s1 = bulk_server(200)
+    connected_client(monkeypatch, s1).list_uids("INBOX")
+    uids_bytes = s1.loop_report()["bytes_out"]
+
+    s2 = bulk_server(200)
+    connected_client(monkeypatch, s2).list_headers("INBOX")
+    headers_bytes = s2.loop_report()["bytes_out"]
+
+    assert uids_bytes < headers_bytes * 0.1                      # 至少降 90%
+
+
+def test_build_report_existence_uses_search_no_header_fetch(monkeypatch):
+    # P1 端到端（真 client over 引擎）：報告階段以 UID SEARCH 判存在性、零整夾標頭抓取（SC-001）
+    server = fresh_server()
+    client = connected_client(monkeypatch, server)
+    cache = classifier.ClassifyCache()
+    rows = _rows(
+        (str(INBOX_NEWSLETTER_UID), "INBOX", "Archive"),
+        (str(INBOX_USER_DELETED_UID), "INBOX", "Archive"),   # 已標 \Deleted → 視為存在=candidate（Q1）
+        ("999999", "INBOX", "Archive"),                       # 不存在 → infeasible
+    )
+    items = classifier.build_report(client, rows, cache=cache)
+    status = {it.row.uid: it.status for it in items}
+    assert status[str(INBOX_NEWSLETTER_UID)] == classifier.CANDIDATE
+    assert status[str(INBOX_USER_DELETED_UID)] == classifier.CANDIDATE   # Clarify Q1
+    assert status["999999"] == classifier.INFEASIBLE
+    rep = server.loop_report()
+    assert rep["command_counts"].get("UID SEARCH", 0) >= 1
+    assert server.command_count("UID FETCH") == 0               # 報告階段零整夾標頭抓取（SC-001）
+    assert rep["fetches_per_folder"] == {}                      # 無整夾 header 讀
+
+
+def test_list_headers_still_full_headers_not_minimized(monkeypatch):
+    # US2/FR-006/SC-005：內容路徑**不得被誤最小化**——list_headers 仍取完整標頭、仍做 FETCH
+    server = fresh_server()
+    client = connected_client(monkeypatch, server)
+    headers = client.list_headers("INBOX")
+    assert len(headers) == 8                                     # 母版 INBOX 8 封
+    assert any("報告" in h.subject for h in headers)            # CJK encoded-word 主旨仍解碼（有內容）
+    assert server.command_count("UID FETCH") >= 1               # 內容路徑仍做標頭 FETCH（未被最小化）
+    assert server.command_count("UID SEARCH") >= 1              # 仍先 SEARCH 取 UID 再分批 FETCH

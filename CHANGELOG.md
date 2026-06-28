@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.1] - 2026-06-28
+### Changed — 大量信箱分類效能（feature 006，P1 存在性檢查最小化）
+- **分類「檢查報告」不再整夾抓標頭**：判斷來源郵件是否存在，改為只取「來源夾現存 UID 集合」（一次 `UID SEARCH ALL`），取代原本下載並解析整夾完整標頭再幾乎全丟的浪費。實測 10,000 封來源夾的報告階段：~200 批 FETCH → **1 次 SEARCH**、下傳 ~1.63 MB → 僅 UID 清單（降幅 **≥90%**）；逐列判定與搬移結果**等價現況**。「現存」沿用 `UID SEARCH ALL` 語意（含已標 `\Deleted` 未 expunge 者）。
+- 新增**後端中立**的 `MailBackend.list_uids(folder)`（IMAP 實作＝`SELECT readonly` + `UID SEARCH ALL`，僅置於 `imap_client.py`；以 `_with_reconnect` 包裝、與透明重連相容）；`classifier._source_uids` 改用之。需要內容的功能（匯出工作表、列出標題）與分類**搬移執行路徑不變**。
+### Tests
+- 跨 seam 走 IMAP 模擬器引擎驗請求端：`list_uids` 只送 `UID SEARCH`、零整夾 `UID FETCH`、含已標刪 UID、重連後完整回傳、下載量較 `list_headers` 降 ≥90%；分類層以 `FakeBackend` 驗判定等價／每夾一次／進度透傳。260 passed（+1 xfailed），全程離線、雙層驗證。
+### Notes
+- 本期**不含** P4 候選分組（延至 P2/P3 同期，理由見 `doc/mailkeeper-performance-report-20260627.html` 與 `specs/006-bulk-classify-efficiency`）。
+
 ## [0.6.0] - 2026-06-24
 ### Added — 大量信箱的效能與韌性（feature 005, R7）
 - **token 過期 / 連線中斷自動恢復**：操作中途偵測到 session 失效/EOF 時，後端**透明重連**（沿用既有授權**靜默續期** `auth.get_token_silent` → 重建 IMAP 連線 → 重新認證 → 有界退避重試），分類**項目級續做**、匯出**整批重抓**，直到完成。靜默續期不可行（refresh token 失效）→ 擲後端中立的 `ReauthRequired` → cli **乾淨停止**並回報已完成/未完成數（重新登入後以同一份工作表重跑續完，冪等）。重連/續期/重試屬協定細節，僅置於 `imap_client.py`；MSAL 僅靜默路徑在 `auth.py`；client 以注入式 `token_provider`/`on_status` 參與，維持後端隔離、**不新增 runtime 相依**。

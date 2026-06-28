@@ -41,7 +41,7 @@ def test_build_report_propagates_source_fetch_error(make_backend, monkeypatch):
     def boom(folder, *, on_progress=None):
         raise OSError("connection lost")
 
-    monkeypatch.setattr(backend, "list_headers", boom)
+    monkeypatch.setattr(backend, "list_uids", boom)
     with pytest.raises(OSError):
         classifier.build_report(backend, _rows(("10", "INBOX", "Work")))
 
@@ -63,17 +63,17 @@ def test_execute_moves_only_candidates_and_autocreates(folder_backend):
 
 
 def test_execute_fetches_source_once_per_folder(folder_backend, monkeypatch):
-    # B：兩封同夾搬移，來源資料夾標頭只抓一次（非每封重抓 O(n×m)）
+    # B：兩封同夾搬移，來源夾現存查詢只一次（非每封重查 O(n×m)）
     rows = _rows(("10", "INBOX", "Work"), ("11", "INBOX", "Archive"))
     items = classifier.build_report(folder_backend, rows)
     calls: list[str] = []
-    real = folder_backend.list_headers
+    real = folder_backend.list_uids
 
     def spy(folder, *, on_progress=None):
         calls.append(folder)
         return real(folder, on_progress=on_progress)
 
-    monkeypatch.setattr(folder_backend, "list_headers", spy)
+    monkeypatch.setattr(folder_backend, "list_uids", spy)
     classifier.execute(folder_backend, items)
     assert calls.count("INBOX") == 1
 
@@ -98,30 +98,6 @@ def test_new_folders_lists_to_be_created(folder_backend):
     rows = _rows(("10", "INBOX", "Work"), ("11", "INBOX", "NewA"), ("20", "Work", "NewB"))
     items = classifier.build_report(folder_backend, rows)
     assert classifier.new_folders(folder_backend, items) == ["NewA", "NewB"]
-
-
-def test_build_report_wires_progress_to_source_reads(folder_backend, monkeypatch):
-    # 體驗修正：功能3 初步檢驗（讀來源夾標頭）也要能接上進度回呼，避免大量郵件時像當機。
-    import contextlib
-
-    seen: dict[str, object] = {}
-    real = folder_backend.list_headers
-
-    def spy(folder, *, on_progress=None):
-        seen[folder] = on_progress
-        return real(folder, on_progress=on_progress)
-
-    monkeypatch.setattr(folder_backend, "list_headers", spy)
-
-    labels: list[str] = []
-
-    def factory(label):
-        labels.append(label)
-        return contextlib.nullcontext(lambda d, t: None)
-
-    classifier.build_report(folder_backend, _rows(("10", "INBOX", "Work")), progress=factory)
-    assert seen.get("INBOX") is not None  # 來源夾讀取已接上進度回呼
-    assert any("INBOX" in lbl for lbl in labels)  # 進度標籤帶資料夾名
 
 
 def test_execute_reports_progress(folder_backend):
@@ -151,3 +127,56 @@ def test_execute_stale_uid_reported_as_failure(folder_backend):
     assert results[1].ok is False
     moves = [a for a in folder_backend.actions if a[0] == "move"]
     assert len(moves) == 1  # 第二列從未真正搬移
+
+
+# ── feature 006 (P1)：存在性檢查改走 list_uids（不抓整夾標頭）─────────────────
+
+def test_build_report_uses_list_uids_not_list_headers(folder_backend, monkeypatch):
+    # P1/FR-001：報告階段以 list_uids 判存在性，完全不呼叫 list_headers（不抓標頭）
+    uid_calls: list[str] = []
+    hdr_calls: list[str] = []
+    real_uids = folder_backend.list_uids
+
+    def uid_spy(folder, *, on_progress=None):
+        uid_calls.append(folder)
+        return real_uids(folder, on_progress=on_progress)
+
+    def hdr_spy(folder="INBOX", *, on_progress=None):
+        hdr_calls.append(folder)
+        return []
+
+    monkeypatch.setattr(folder_backend, "list_uids", uid_spy)
+    monkeypatch.setattr(folder_backend, "list_headers", hdr_spy)
+    classifier.build_report(folder_backend, _rows(("10", "INBOX", "Work"), ("11", "INBOX", "Archive")))
+    assert uid_calls.count("INBOX") == 1   # FR-002：每來源夾查一次
+    assert hdr_calls == []                  # FR-001/SC-001：報告階段零標頭抓取
+
+
+def test_build_report_preserves_worksheet_row_order(folder_backend):
+    # FR-004：報告列出順序＝輸入工作表列序（本期不改順序）
+    rows = _rows(("11", "INBOX", "Archive"), ("10", "INBOX", "Work"), ("99", "INBOX", "Work"))
+    items = classifier.build_report(folder_backend, rows)
+    assert [it.row.uid for it in items] == ["11", "10", "99"]
+
+
+def test_build_report_threads_progress_to_list_uids(folder_backend, monkeypatch):
+    # FR-005/SC-006：build_report 把 on_progress 透傳到 list_uids，取得 determinate 進度
+    import contextlib
+
+    seen: dict[str, object] = {}
+    real = folder_backend.list_uids
+
+    def spy(folder, *, on_progress=None):
+        seen[folder] = on_progress
+        return real(folder, on_progress=on_progress)
+
+    monkeypatch.setattr(folder_backend, "list_uids", spy)
+    labels: list[str] = []
+
+    def factory(label):
+        labels.append(label)
+        return contextlib.nullcontext(lambda d, t: None)
+
+    classifier.build_report(folder_backend, _rows(("10", "INBOX", "Work")), progress=factory)
+    assert seen.get("INBOX") is not None          # 存在性查詢已接上進度回呼
+    assert any("INBOX" in lbl for lbl in labels)  # 進度標籤帶資料夾名
