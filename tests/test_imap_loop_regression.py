@@ -135,12 +135,15 @@ def test_list_headers_resumable_skips_fetched_batches(monkeypatch):
     assert len(headers) == 120 and all(h.uid for h in headers)        # 完整、UID 全非空
     assert len({h.uid for h in headers}) == 120                        # 無重複/遺漏
     server.assert_all_fetches_request_uid()
-    assert server.command_count("UID FETCH") <= 4                      # ≤⌈120/50⌉+1：續抓、非整批重抓
+    # 續抓的決定性證明（SR C1）：每個 UID 至多被抓一次——整批重抓會重抓前段 UID → 此斷言失敗。
+    fetched: list[int] = []
+    for cmd in server.commands("UID FETCH"):
+        fetched.extend(cmd.affected_uids)
+    assert len(fetched) == len(set(fetched)) == 120                    # 無重抓、無遺漏：120 封各抓一次
+    assert server.command_count("UID FETCH") == 3                      # ⌈120/50⌉（eof 失敗批未計）；整批重抓會是 4
     assert server.command_count("AUTHENTICATE") >= 2                   # 發生重連
-    # 進度跨重連延續（不歸零、不倒退）
-    assert progress and progress[-1] == (120, 120)
-    assert all(b >= a for (a, _), (b, _) in zip(progress, progress[1:]))
-    assert min(d for d, _ in progress) >= 50                           # 第一批(50)後才回報、未歸零
+    # 進度跨重連嚴格遞增、不重複回報（整批重抓會重覆出現 (50,120)）：
+    assert progress == [(50, 120), (100, 120), (120, 120)]
 
 
 def test_list_headers_uidvalidity_change_on_reconnect_refetches(monkeypatch):

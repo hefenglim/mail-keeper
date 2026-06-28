@@ -11,7 +11,7 @@
 ## 不變式 / 引擎斷言
 | 斷言 | 期望 |
 |---|---|
-| 中途 `arm_expiry(before_op="fetch")` + 重連 | `command_count("UID FETCH")` ≤ ⌈N/批⌉ + 1（不翻倍；+1 容許失敗批重試一次）。不用 `redundant_full_folder_reads`（多批讀取恆 >1，非有效指標） |
+| 中途 `arm_expiry(before_op="fetch")` + 重連 | **每個 UID 至多被抓一次**（彙總各 `commands("UID FETCH").affected_uids` 無重複 = 決定性續抓證明，整批重抓會重抓前段 UID 而失敗）；`command_count("UID FETCH")` == ⌈N/批⌉（eof 失敗批未計）。不用 `redundant_full_folder_reads`（多批讀取恆 >1，非有效指標）；不用寬鬆的 `≤⌈N/批⌉+1`（無法區分續抓與整批重抓） |
 | 最終結果 | headers 數=N、UID 全非空、無重複、無遺漏；`assert_all_fetches_request_uid()` |
 | `set_uidvalidity` 變更 + 斷線 | 重連後重抓、結果正確（不沿用過時 UID） |
 | 多編碼主旨 | 主旨/寄件者等解碼逐字等價現況 |
