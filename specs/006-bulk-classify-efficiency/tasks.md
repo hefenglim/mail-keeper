@@ -78,8 +78,8 @@ description: "Task list for 006-bulk-classify-efficiency (Phase 1: Lean Existenc
 
 - [x] T010 [P] `python -m mypy src/mailkeeper` 乾淨；`python -m pytest --cov=mailkeeper --cov-report=term-missing` 達標（`imap_client.py` ≥88%、總 ≥85%）——`list_uids`/`_list_uids_impl` 須被引擎測試覆蓋。
 - [x] T011 執行 `quickstart.md` 的 V1–V6 驗證情境，逐項對照 SC-001..SC-006 通過。
-- [x] T012 升版（Principle VI）：`pyproject.toml` 與 `src/mailkeeper/__init__.py` 版本 `0.6.0 → 0.7.0`（兩處一致）；`CHANGELOG.md` 加 `## [0.7.0] - <真實交付日期>` 條目（分類存在性檢查最小化、新增後端中立 `list_uids`、效能：10k 來源夾報告往返/下載大降）。
-- [x] T013 [P] 文件同步追蹤：回填 `doc/mailkeeper-performance-report-20260627.html` 狀態表 **P1 → ✅ 已完成 v0.7.0**（更新對應卡片、頂端「最後更新」、底部修訂紀錄；**P4 維持未實作、標延至 P2/P3**）；同步 `memory/roadmap-backlog.md` 與 `memory/perf-optimization-report.md`。
+- [x] T012 升版（Principle VI）：`pyproject.toml` 與 `src/mailkeeper/__init__.py` 版本 `0.6.0 → 0.6.1`（兩處一致）；`CHANGELOG.md` 加 `## [0.6.1] - <真實交付日期>` 條目（分類存在性檢查最小化、新增後端中立 `list_uids`、效能：10k 來源夾報告往返/下載大降）。
+- [x] T013 [P] 文件同步追蹤：回填 `doc/mailkeeper-performance-report-20260627.html` 狀態表 **P1 → ✅ 已完成 v0.6.1**（更新對應卡片、頂端「最後更新」、底部修訂紀錄；**P4 維持未實作、標延至 P2/P3**）；同步 `memory/roadmap-backlog.md` 與 `memory/perf-optimization-report.md`。
 
 ---
 

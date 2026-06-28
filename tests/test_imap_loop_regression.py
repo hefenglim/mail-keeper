@@ -192,6 +192,14 @@ def test_list_uids_includes_deleted_not_expunged(monkeypatch):
     assert str(INBOX_USER_DELETED_UID) in client.list_uids("INBOX")
 
 
+def test_list_uids_returns_empty_set_on_search_no(monkeypatch):
+    # 防禦分支（SR F1）：伺服器對 UID SEARCH 回 NO → list_uids 回空集合、不崩潰
+    server = fresh_server()
+    server.arm_response("search", typ="NO")
+    client = connected_client(monkeypatch, server)
+    assert client.list_uids("INBOX") == set()
+
+
 def test_list_uids_reconnects_and_returns_full_set(monkeypatch):
     # FR-009：查詢期間連線中斷 → 透明重連後仍回完整集合、不遺漏
     server = fresh_server()
