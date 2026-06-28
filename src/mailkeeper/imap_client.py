@@ -463,6 +463,10 @@ class OutlookIMAPClient:
         批次未成功（伺服器不支援 MOVE 或拒絕）→ 對該塊**退回逐封** `_move_impl` 以精確歸因，
         單封失敗不連坐同批其他封。連線中斷透明重連並重試整批（UID MOVE 冪等、後備路徑亦冪等）；
         連線層級失敗（重連用盡）與 `ReauthRequired` 往外拋（不計入單列失敗）。
+
+        已知 TOCTOU（SR F2，可接受）：批次 `UID MOVE` 對「報告後、執行前被外部刪除」的 uid，
+        伺服器靜默略過仍回 OK，本方法將其記為成功（None）。執行前的 cache 存在性檢查已過濾絕大多數；
+        此窗口極窄且不造成資料不安全（該封本就已不在來源），故不解析 COPYUID srcset 逐封核對。
         """
         return self._with_reconnect(lambda: self._move_many_impl(list(uids), dest_folder, mailbox))
 
@@ -472,7 +476,15 @@ class OutlookIMAPClient:
         results: dict[str, str | None] = {}
         for batch in _chunked(uids, config.MOVE_BATCH_MAX):
             self._ensure_selected(mailbox)
-            typ, _ = self._conn.uid("move", ",".join(batch), dest_folder)
+            try:
+                typ, _ = self._conn.uid("move", ",".join(batch), dest_folder)
+            except ReauthRequired:
+                raise
+            except Exception as exc:
+                if self._is_session_lost(exc):
+                    raise  # 連線層級 → 交由 _with_reconnect 重連重試整批
+                typ = "NO"  # 非連線類錯誤（如 imaplib 對 BAD 拋出）→ 視同批次未成功，退逐封歸因
+                #            （SR F1：絕不讓非連線錯誤被上層當「連線層級早停」而靜默丟棄其餘列）
             if typ == "OK":
                 for u in batch:
                     results[u] = None

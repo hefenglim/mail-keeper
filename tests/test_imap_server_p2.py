@@ -140,6 +140,19 @@ def test_move_many_fallback_per_uid_spares_foreign_deleted(monkeypatch):
     assert len(server.mailboxes["Archive"]) == 2
 
 
+def test_move_many_batch_bad_attributes_per_uid_not_dropped(monkeypatch):
+    # SR F1：批次 UID MOVE 回 BAD（非連線類，imaplib 拋出）→ 退逐封歸因；錯誤如實記錄、不靜默丟棄/搬走
+    server = _server()  # supports_move=True
+    server.arm_response("MOVE", typ="BAD", persist=True)  # 每次 MOVE 都 BAD
+    _no_sleep(monkeypatch)
+    client = connected_client(monkeypatch, server)
+    out = client.move_many([str(INBOX_NEWSLETTER_UID), str(INBOX_CJK_UID)], "Archive", "INBOX")
+    assert set(out) == {str(INBOX_NEWSLETTER_UID), str(INBOX_CJK_UID)}
+    assert all(v is not None for v in out.values())   # 逐封歸因（皆有錯誤訊息），非靜默成功
+    inbox = {u for u, _ in server.snapshot()["INBOX"]}
+    assert INBOX_NEWSLETTER_UID in inbox and INBOX_CJK_UID in inbox  # 未誤搬、來源留存
+
+
 def test_ensure_folder_creates_then_idempotent(monkeypatch):
     server = _server()
     client = connected_client(monkeypatch, server)
