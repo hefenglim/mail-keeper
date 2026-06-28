@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MailKeeper 效能優化報告 · P1–P7</title>
+<style>
+  :root{
+    --bg:#0f1420; --panel:#161d2e; --panel2:#1d2740; --ink:#e8edf6; --muted:#9aa7bd;
+    --line:#2a3553; --accent:#5b9bff; --good:#3ddc91; --warn:#ffcf5c; --bad:#ff6b6b;
+    --p1:#ff5d5d; --p2:#ff9f43; --p3:#ffc857; --p4:#7bd88f; --p5:#5ec8d8; --p6:#9aa7bd; --p7:#7a8699;
+    --mono:"SF Mono",ui-monospace,"Cascadia Code","Consolas",monospace;
+    --sans:"Segoe UI","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:linear-gradient(180deg,#0c111c,#0f1420 30%);color:var(--ink);font-family:var(--sans);line-height:1.7;font-size:15.5px}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 22px 80px}
+  h1{font-size:30px;margin:0 0 6px;letter-spacing:.3px}
+  h2{font-size:22px;margin:46px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:17px;margin:20px 0 8px;color:var(--accent)}
+  p{margin:8px 0}
+  code{font-family:var(--mono);background:#0c1322;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:.88em;color:#cfe0ff}
+  .sub{color:var(--muted);font-size:14px}
+  a{color:var(--accent);text-decoration:none}
+
+  .hero{background:radial-gradient(900px 280px at 20% -10%,rgba(91,155,255,.16),transparent),var(--panel);
+        border:1px solid var(--line);border-radius:16px;padding:24px 26px;margin-top:14px}
+  .pill{display:inline-block;font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 10px;margin:2px 6px 2px 0}
+  .key{background:#0c1322;border-left:3px solid var(--accent);border-radius:8px;padding:12px 14px;margin:14px 0}
+
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0 0;font-size:13px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .dot{width:12px;height:12px;border-radius:3px;display:inline-block}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:0;margin:22px 0;overflow:hidden}
+  .card .head{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line);background:var(--panel2)}
+  .tag{font-family:var(--mono);font-weight:700;font-size:13px;color:#0c111c;border-radius:7px;padding:3px 9px}
+  .card .head .ttl{font-size:18px;font-weight:650}
+  .card .body{padding:18px 20px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto}
+  .badge{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:2px 10px;color:var(--muted);white-space:nowrap}
+  .badge.new{color:#bfe3ff;border-color:#2f5a86}
+  .badge.bk{color:#ffd9a8;border-color:#6b4f2a}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+
+  .box{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:#0e1525}
+  .box.before{border-color:#5a2b2b;background:#1a0f12}
+  .box.after{border-color:#27543a;background:#0e1a14}
+  .box h4{margin:0 0 8px;font-size:13px;letter-spacing:.5px;text-transform:uppercase}
+  .box.before h4{color:#ff9b9b}
+  .box.after h4{color:#7ef0b6}
+
+  /* round-trip ladder */
+  .ladder{font-family:var(--mono);font-size:12.5px;margin:4px 0}
+  .rt{display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px dashed #1f2a44}
+  .rt:last-child{border-bottom:0}
+  .rt .n{color:#6f7d96;width:30px;text-align:right;flex:none}
+  .rt .arrow{flex:none;color:#5b9bff}
+  .rt .cmd{color:#cfe0ff}
+  .rt.waste{opacity:.92}
+  .rt.waste .cmd{color:#ff8e8e}
+  .rt.keep .cmd{color:#7ef0b6}
+  .rt .note{color:#6f7d96;margin-left:auto;font-family:var(--sans);font-size:11.5px}
+
+  .count{display:inline-flex;align-items:baseline;gap:6px;margin-top:8px}
+  .count .big{font-size:26px;font-weight:800;font-family:var(--mono)}
+  .count .u{font-size:12px;color:var(--muted)}
+  .count.bad .big{color:var(--bad)} .count.good .big{color:var(--good)}
+
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:#cdd8ec;font-weight:600}
+  td .s{font-size:12.5px;color:var(--muted)}
+
+  .barwrap{margin:10px 0}
+  .barrow{display:flex;align-items:center;gap:10px;margin:7px 0;font-size:13px}
+  .barrow .lab{width:185px;flex:none;color:#cdd8ec}
+  .barrow .track{flex:1;background:#0c1322;border:1px solid var(--line);border-radius:7px;height:22px;overflow:hidden;position:relative}
+  .barrow .fill{height:100%;display:flex;align-items:center;justify-content:flex-end;padding-right:8px;font-family:var(--mono);font-size:11.5px;color:#0c111c;font-weight:700;white-space:nowrap}
+  .toc{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:14px}
+  .toc a{display:block;border:1px solid var(--line);border-radius:9px;padding:9px 11px;background:#0e1525;font-size:13px}
+  .toc a:hover{border-color:var(--accent)}
+  .toc a b{display:block;font-size:11px;color:var(--muted);font-weight:500}
+  .foot{margin-top:40px;color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:16px}
+  .seq{font-family:var(--mono);font-size:12px;white-space:pre;overflow-x:auto;background:#0c1322;border:1px solid var(--line);border-radius:9px;padding:12px 14px;color:#bcd}
+  .emph{color:var(--warn)}
+  ul.tight{margin:6px 0;padding-left:20px} ul.tight li{margin:3px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>MailKeeper 效能優化報告</h1>
+  <p class="sub">P1–P7 精緻解說 · 情景演示 · 前後對比圖 · 量化效果 &nbsp;|&nbsp; 基於知識圖譜熱點 + 實際讀碼 + IMAP 模擬器實測，非臆測</p>
+  <p class="sub">
+    <span class="pill">評估日期：2026-06-27</span>
+    <span class="pill">最後更新：2026-06-28（加入實測基準＋狀態追蹤）</span>
+    <span class="pill">適用版本基準：v0.6.0</span>
+    <span class="pill">文件性質：living doc（完成優化須回填狀態與版本號）</span>
+  </p>
+
+  <div class="hero">
+    <div>
+      <span class="pill">分支基準：main</span>
+      <span class="pill">層級：產品碼 <code>src/mailkeeper/</code></span>
+      <span class="pill">瓶頸本質：IMAP 網路往返</span>
+      <span class="pill">驗證工具：IMAP 模擬器引擎</span>
+    </div>
+    <div class="key">
+      <b>一句話心智模型：</b>IMAP 是<strong>同步協定</strong>——送一個命令、等一個回應，就是「一次往返（round-trip）」。
+      在大信箱上，<em>本地 CPU 幾乎不是瓶頸，往返次數才是</em>。所有優化的目標只有一個：<strong>把往返次數降下來，且不犧牲正確性與安全</strong>。
+    </div>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--bad)"></i>浪費的往返／白工</span>
+      <span><i class="dot" style="background:var(--good)"></i>必要且高效的往返</span>
+      <span><i class="dot" style="background:var(--accent)"></i>命令／回應</span>
+      <span class="badge new">新發現</span>
+      <span class="badge bk">已在 backlog</span>
+    </div>
+  </div>
+
+  <div class="toc">
+    <a href="#anchor"><b>錨定情景</b>1 萬封 · 搬 500 封</a>
+    <a href="#status"><b>📌 狀態追蹤</b>已完成／未實作</a>
+    <a href="#p1"><b>P1 · 最高</b>存在性檢查過度抓取</a>
+    <a href="#p2"><b>P2</b>批次 UID MOVE</a>
+    <a href="#p3"><b>P3 · backlog C2</b>重複 SELECT</a>
+    <a href="#p4"><b>P4 · 前置</b>候選分組排序</a>
+    <a href="#p5"><b>P5</b>重連整夾重抓</a>
+    <a href="#p6"><b>P6</b>批量大小可調</a>
+    <a href="#p7"><b>P7</b>解析微優化</a>
+    <a href="#road"><b>落地</b>順序與約束</a>
+  </div>
+
+  <!-- ============ ANCHOR SCENARIO ============ -->
+  <h2 id="anchor">錨定情景：把這些抽象優化變成「你感受得到的數字」</h2>
+  <p>整份報告共用同一個具體情景，方便對照每項優化的貢獻：</p>
+  <div class="key">
+    📥 <b>INBOX 有 10,000 封郵件</b>；你準備一份分類工作表（CSV），其中 <b>500 封</b>要從 <code>INBOX</code> 搬到 <code>Work</code> 夾。<br>
+    流程：<code>classify</code> 先產<strong>檢查報告（dry-run）</strong>確認來源郵件存在，再<strong>執行搬移</strong>。
+  </div>
+
+  <h3>端到端「網路往返」總量（越短越好）<span class="badge new" style="vertical-align:middle">IMAP 模擬器實測</span></h3>
+  <div class="barwrap">
+    <div class="barrow">
+      <span class="lab">今日現況（實測）</span>
+      <span class="track"><span class="fill" style="width:100%;background:linear-gradient(90deg,#ff6b6b,#ff9f43)">1,205 次往返 + 10,000 次解析 + 下傳 ~1.63 MB 標頭</span></span>
+    </div>
+    <div class="barrow">
+      <span class="lab">+ P4 + P1 + P3（預估）</span>
+      <span class="track"><span class="fill" style="width:42%;background:linear-gradient(90deg,#ffc857,#7bd88f)">≈ 506 次往返 · 0 浪費解析 · 下傳僅 UID 清單</span></span>
+    </div>
+    <div class="barrow">
+      <span class="lab">+ P2 批次 MOVE（預估）</span>
+      <span class="track"><span class="fill" style="width:5%;background:linear-gradient(90deg,#3ddc91,#5ec8d8)">≈ 11 次</span></span>
+    </div>
+  </div>
+
+  <h3>實測基準明細（現況 v0.6.0，2026-06-28 量測）</h3>
+  <p class="sub">方法：以 <code>tests/imap_server.py::ImapServer</code> 線級引擎驅動<strong>真實產品碼</strong>（<code>classifier.build_report</code>＋<code>execute</code>＋<code>OutlookIMAPClient</code>），讀 <code>loop_report()</code> / <code>redundant_selects()</code>。可重現。</p>
+  <div class="grid2">
+    <div class="box before">
+      <h4>情景 A · 分類（INBOX=10,000，搬 500 → Work）</h4>
+      <table style="margin:2px 0">
+        <tr><th>指令</th><th>次數</th><th>對應優化</th></tr>
+        <tr><td>UID FETCH（整夾標頭）</td><td><b style="color:#ff8e8e">200</b></td><td>P1（只為取 UID，浪費）</td></tr>
+        <tr><td>SELECT（其中 redundant）</td><td><b style="color:#ff8e8e">500（499）</b></td><td>P3</td></tr>
+        <tr><td>UID MOVE</td><td><b style="color:#ffcf5c">500</b></td><td>P2（可批次成 5 組）</td></tr>
+        <tr><td>LIST / EXAMINE / UID SEARCH</td><td>1 / 1 / 1</td><td>—</td></tr>
+        <tr><td><b>總往返</b></td><td colspan="2"><b style="color:#ff8e8e">1,205</b>　|　下傳 <b>~1.63 MB</b>（標頭，幾乎全丟）</td></tr>
+      </table>
+    </div>
+    <div class="box after">
+      <h4>情景 B · 匯出（list_headers，INBOX=10,000）</h4>
+      <table style="margin:2px 0">
+        <tr><th>指令</th><th>次數</th><th>對應優化</th></tr>
+        <tr><td>UID FETCH</td><td><b>200</b></td><td>P6（批量 200 → 50 批）／P5（重連續傳）</td></tr>
+        <tr><td>EXAMINE / UID SEARCH</td><td>1 / 1</td><td>—</td></tr>
+        <tr><td><b>總往返</b></td><td colspan="2"><b>204</b>（匯出真的需要全表頭，P1 救不到）</td></tr>
+      </table>
+      <p class="sub" style="margin-top:8px">換算：<b>1,205 → ~506</b>（P4+P1+P3）<b> → ~11</b>（再加 P2）。實測證實先前估計（1200→503→8）方向正確。</p>
+    </div>
+  </div>
+  <p class="sub">註：絕對值依批量大小、伺服器能力而定；重點在「相對縮減幅度」。下方每張卡片拆解這些數字怎麼來的。</p>
+
+  <!-- ============ STATUS TRACKING ============ -->
+  <h2 id="status">📌 優化狀態追蹤（living — 完成一項就回填這裡）</h2>
+  <div class="key">
+    <b>維護準則（重要）：</b>每當<strong>完成一項優化</strong>，必須同步更新——
+    <ul class="tight" style="margin-top:6px">
+      <li>本表該列：狀態改「✅ 已完成」、填上<strong>完成版本號</strong>（如 v0.7.0）與對應 <code>spec NNN</code>／PR；</li>
+      <li>下方對應卡片頂端加註「已於 vX.Y.Z 完成」；本檔頂端「最後更新」日期；底部「修訂紀錄」加一行；</li>
+      <li>連動同步：<code>CHANGELOG.md</code>、<code>memory/roadmap-backlog.md</code>、相關 <code>spec</code>，使「已做／未做」始終一目了然。</li>
+    </ul>
+  </div>
+  <table>
+    <tr><th style="width:46px">項目</th><th>名稱</th><th style="width:88px">影響</th><th style="width:110px">狀態</th><th style="width:96px">完成版本</th><th>對應 feature / 備註</th></tr>
+    <tr><td><b style="color:var(--p4)">P4</b></td><td>候選分組排序（前置乘數）</td><td>放大器</td><td>🔲 未實作</td><td>—</td><td>建議與 P1 同一 feature（即將草擬 spec）</td></tr>
+    <tr><td><b style="color:var(--p1)">P1</b></td><td>存在性檢查改 UID SEARCH（不抓全表頭）</td><td>最高</td><td>🔲 未實作</td><td>—</td><td>即將草擬 <code>/speckit.specify</code>（P4+P1）</td></tr>
+    <tr><td><b style="color:var(--p3)">P3</b></td><td>免重複 SELECT（<code>_ensure_selected</code>）</td><td>中</td><td>🔲 未實作</td><td>—</td><td>= backlog <b>C2</b>；動搬移路徑建議併 C1</td></tr>
+    <tr><td><b style="color:var(--p2)">P2</b></td><td>批次 UID MOVE</td><td>高</td><td>🔲 未實作</td><td>—</td><td>與 backlog <b>C1</b>（fallback 冪等性）一起設計</td></tr>
+    <tr><td><b style="color:var(--p5)">P5</b></td><td>重連可續傳（不整夾重抓）</td><td>中</td><td>🔲 未實作</td><td>—</td><td>主要利匯出大信箱</td></tr>
+    <tr><td><b style="color:var(--p6)">P6</b></td><td>FETCH 批量大小可調</td><td>低</td><td>🔲 未實作</td><td>—</td><td>納入 <code>config.json</code></td></tr>
+    <tr><td><b style="color:var(--p7)">P7</b></td><td>表頭解析微優化</td><td>低</td><td>🔲 未實作</td><td>—</td><td>邊際效益；<code>_decode_mutf7</code> 為指標誤報</td></tr>
+  </table>
+  <p class="sub">關聯 backlog（產品韌性，需動搬移路徑時一併處理）：<span class="badge bk">C1 fallback move 冪等性</span> <span class="badge bk">C2 重 SELECT（= P3）</span>。狀態圖例：🔲 未實作 · 🚧 進行中 · ✅ 已完成 vX.Y.Z。</p>
+
+  <!-- ============ P1 ============ -->
+  <div class="card" id="p1">
+    <div class="head">
+      <span class="tag" style="background:var(--p1)">P1</span>
+      <span class="ttl">分類存在性檢查「過度抓取」整封標頭</span>
+      <span class="meta">
+        <span class="badge new">新發現</span>
+        <span class="badge">影響：最高</span>
+        <span class="badge">工：中</span>
+        <span class="badge">風險：低</span>
+      </span>
+    </div>
+    <div class="body">
+      <h3>問題</h3>
+      <p>分類報告（<code>build_report</code>）要判斷「CSV 裡每一列的來源 UID 是否真的存在於來源夾」。它取得「來源夾現存 UID 集合」的方式是——
+        呼叫 <code>list_headers(folder)</code>，這會對<strong>整夾每一封</strong>下 <code>FETCH (UID BODY.PEEK[HEADER.FIELDS (SUBJECT FROM TO DATE)])</code>，
+        逐封跑 <code>email</code> 解析 + 4 次 <code>_decode()</code>……然後<strong>只留下 <code>h.uid</code>，其餘全部丟掉</strong>。</p>
+      <ul class="tight">
+        <li><code>classifier.py:78</code> — <code>{h.uid for h in backend.list_headers(folder)}</code>（只要 uid）</li>
+        <li><code>classifier.py:98-111</code> — <code>build_report</code> 全程<strong>從不</strong>讀 subject／from</li>
+        <li>真相：要的只是「UID 清單」，但 <code>UID SEARCH ALL</code> 一次就能拿到（且它<em>已經</em>在 <code>_list_headers_impl:294</code> 被呼叫過，只是之後又多此一舉地 FETCH 全表頭）</li>
+      </ul>
+
+      <h3>情景演示（來源夾 = 10,000 封的 INBOX）</h3>
+      <div class="grid2">
+        <div class="box before">
+          <h4>Before · 為了 UID 卻下載全表頭</h4>
+          <div class="ladder">
+            <div class="rt"><span class="n">1</span><span class="arrow">→</span><span class="cmd">SELECT INBOX</span></div>
+            <div class="rt"><span class="n">2</span><span class="arrow">→</span><span class="cmd">UID SEARCH ALL</span><span class="note">← 拿到 1 萬個 UID（其實已足夠！）</span></div>
+            <div class="rt waste"><span class="n">3</span><span class="arrow">→</span><span class="cmd">UID FETCH 1..50  (HEADER.FIELDS…)</span></div>
+            <div class="rt waste"><span class="n">…</span><span class="arrow">→</span><span class="cmd">…再 199 批…</span><span class="note">每批回 50 封完整表頭</span></div>
+            <div class="rt waste"><span class="n">202</span><span class="arrow">→</span><span class="cmd">UID FETCH 9951..10000</span></div>
+          </div>
+          <div class="count bad"><span class="big">≈ 202</span><span class="u">次往返</span><span class="big" style="font-size:18px">+ 10,000</span><span class="u">次解析（全部丟棄）</span></div>
+        </div>
+        <div class="box after">
+          <h4>After · 只問「有哪些 UID」</h4>
+          <div class="ladder">
+            <div class="rt"><span class="n">1</span><span class="arrow">→</span><span class="cmd">SELECT INBOX</span></div>
+            <div class="rt keep"><span class="n">2</span><span class="arrow">→</span><span class="cmd">UID SEARCH ALL</span><span class="note">← 1 萬個 UID，完成</span></div>
+          </div>
+          <div class="count good"><span class="big">≈ 2</span><span class="u">次往返</span><span class="big" style="font-size:18px">+ 0</span><span class="u">解析浪費</span></div>
+          <p class="sub" style="margin-top:10px">同一份 UID 集合經 <code>ClassifyCache</code> 給「執行階段」重用——存在性檢查零額外成本。</p>
+        </div>
+      </div>
+
+      <h3>改法</h3>
+      <p>在後端 seam 介面 <code>MailBackend</code> 加一個<strong>輕量方法</strong>：</p>
+      <div class="seq">class MailBackend(Protocol):
+    def list_uids(self, folder: str) -> set[str]: ...   # 只回 UID，不抓內容
+
+# imap_client 實作 = 一次 SELECT + 一次 UID SEARCH ALL：
+def list_uids(self, folder):
+    self._conn.select(folder, readonly=True)
+    typ, data = self._conn.uid("search", None, "ALL")
+    return set(data[0].split().decode...) if typ=="OK" else set()</div>
+      <p>分類路徑（<code>_source_uids</code>）改呼叫 <code>list_uids</code>；<code>list_headers</code>（功能1 匯出／功能2 列標題<strong>真的</strong>需要表頭）維持不變。</p>
+      <p class="sub">⚠ 跨 seam 新方法 → 須同步：<code>FakeBackend</code> 實作 + IMAP 模擬器引擎以 <code>assert_all_fetches_request_uid()</code>／log 驗證「分類報告不再對整夾 FETCH」。</p>
+    </div>
+  </div>
+
+  <!-- ============ P2 ============ -->
+  <div class="card" id="p2">
+    <div class="head">
+      <span class="tag" style="background:var(--p2)">P2</span>
+      <span class="ttl">搬移是「每封一次往返」，未用 UID 範圍批次</span>
+      <span class="meta">
+        <span class="badge new">新發現</span>
+        <span class="badge">影響：高</span>
+        <span class="badge">工：高</span>
+        <span class="badge">風險：中</span>
+      </span>
+    </div>
+    <div class="body">
+      <h3>問題</h3>
+      <p><code>execute</code> 對每個候選呼叫一次 <code>backend.move()</code>（<code>classifier.py:170</code>），底層 <code>_move_impl</code> 對<strong>單一 UID</strong> 下 <code>UID MOVE</code>（<code>imap_client.py:366</code>）。IMAP 其實支援一次搬一整組：<code>UID MOVE 1,2,3,7:9 Work</code>。</p>
+
+      <h3>情景演示（搬 500 封，已假設同夾、且已用 P3 免去重複 SELECT）</h3>
+      <div class="grid2">
+        <div class="box before">
+          <h4>Before · 500 封 = 500 次 MOVE</h4>
+          <div class="ladder">
+            <div class="rt waste"><span class="n">1</span><span class="arrow">→</span><span class="cmd">UID MOVE 10 Work</span></div>
+            <div class="rt waste"><span class="n">2</span><span class="arrow">→</span><span class="cmd">UID MOVE 11 Work</span></div>
+            <div class="rt waste"><span class="n">…</span><span class="arrow">→</span><span class="cmd">…498 次…</span></div>
+            <div class="rt waste"><span class="n">500</span><span class="arrow">→</span><span class="cmd">UID MOVE 783 Work</span></div>
+          </div>
+          <div class="count bad"><span class="big">500</span><span class="u">次往返</span></div>
+        </div>
+        <div class="box after">
+          <h4>After · 批次 100／組 = 5 次 MOVE</h4>
+          <div class="ladder">
+            <div class="rt keep"><span class="n">1</span><span class="arrow">→</span><span class="cmd">UID MOVE 10:120,…  Work</span><span class="note">100 封一組</span></div>
+            <div class="rt keep"><span class="n">…</span><span class="arrow">→</span><span class="cmd">… 3 組 …</span></div>
+            <div class="rt keep"><span class="n">5</span><span class="arrow">→</span><span class="cmd">UID MOVE …  Work</span></div>
+          </div>
+          <div class="count good"><span class="big">5</span><span class="u">次往返</span></div>
+        </div>
+      </div>
+
+      <h3>改法 & 取捨</h3>
+      <ul class="tight">
+        <li>把候選依 <code>(current_folder → target_folder)</code> 分組，每組以 UID 集合語法批次 <code>UID MOVE</code>。</li>
+        <li><b>取捨① 進度粒度</b>：進度條從「逐封」變「逐組」，需把進度改成「每組完成 += 該組封數」。</li>
+        <li><b>取捨② 錯誤歸因</b>：一組裡某幾封失敗時，伺服器不會逐封告訴你誰失敗 → <strong>策略：批次失敗就退回該組「逐封」重試</strong>，定位到具體 UID。</li>
+        <li><b>取捨③ 與冪等性糾纏</b>：批次和 backlog 的 <span class="badge bk">C1 fallback 冪等性</span> 互相影響，建議<strong>同一個 feature 一起設計</strong>。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============ P3 ============ -->
+  <div class="card" id="p3">
+    <div class="head">
+      <span class="tag" style="background:var(--p3)">P3</span>
+      <span class="ttl">搬移迴圈對「同一個夾」重複 SELECT</span>
+      <span class="meta">
+        <span class="badge bk">backlog C2</span>
+        <span class="badge">影響：中</span>
+        <span class="badge">工：低</span>
+        <span class="badge">風險：低</span>
+      </span>
+    </div>
+    <div class="body">
+      <h3>問題</h3>
+      <p><code>_move_impl</code> <strong>每一次</strong>都先 <code>self._conn.select(mailbox)</code>（<code>imap_client.py:365</code>），但 client 並沒有記住「我現在選的是哪個夾」。於是搬 500 封同來源 = 多打了 ~499 次<strong>完全多餘</strong>的 SELECT（每次 SELECT 還是一次往返，伺服器又重報一次 EXISTS／FLAGS）。</p>
+
+      <h3>情景演示（搬 500 封同夾）</h3>
+      <div class="grid2">
+        <div class="box before">
+          <h4>Before · SELECT + MOVE 反覆</h4>
+          <div class="ladder">
+            <div class="rt waste"><span class="n">1</span><span class="arrow">→</span><span class="cmd">SELECT INBOX</span><span class="note">多餘（已選）</span></div>
+            <div class="rt"><span class="n">2</span><span class="arrow">→</span><span class="cmd">UID MOVE 10 Work</span></div>
+            <div class="rt waste"><span class="n">3</span><span class="arrow">→</span><span class="cmd">SELECT INBOX</span><span class="note">又多餘</span></div>
+            <div class="rt"><span class="n">4</span><span class="arrow">→</span><span class="cmd">UID MOVE 11 Work</span></div>
+            <div class="rt"><span class="n">…</span><span class="arrow">→</span><span class="cmd">… ×500 …</span></div>
+          </div>
+          <div class="count bad"><span class="big">≈ 1000</span><span class="u">次往返（500 是白工）</span></div>
+        </div>
+        <div class="box after">
+          <h4>After · 只在切夾時 SELECT</h4>
+          <div class="ladder">
+            <div class="rt keep"><span class="n">1</span><span class="arrow">→</span><span class="cmd">SELECT INBOX</span><span class="note">只此一次</span></div>
+            <div class="rt"><span class="n">2</span><span class="arrow">→</span><span class="cmd">UID MOVE 10 Work</span></div>
+            <div class="rt"><span class="n">3</span><span class="arrow">→</span><span class="cmd">UID MOVE 11 Work</span></div>
+            <div class="rt"><span class="n">…</span><span class="arrow">→</span><span class="cmd">… 只剩 MOVE …</span></div>
+          </div>
+          <div class="count good"><span class="big">≈ 501</span><span class="u">次往返</span></div>
+        </div>
+      </div>
+
+      <h3>改法</h3>
+      <p><code>OutlookIMAPClient</code> 記住目前選取的 <code>(mailbox, readonly)</code>，加 <code>_ensure_selected()</code>：只在「未選 / 夾不同 / 模式不同」時才真的 SELECT。</p>
+      <div class="seq">def _ensure_selected(self, mailbox, readonly):
+    if self._selected == (mailbox, readonly):
+        return                      # 已選同夾同模式 → 跳過 SELECT
+    self._conn.select(mailbox, readonly=readonly)
+    self._selected = (mailbox, readonly)
+
+# connect() / _reconnect() 要把 self._selected = None（連線換了，選取失效）</div>
+      <p class="sub">⚠ 鐵則：重連後選取一定失效，必須重置 <code>_selected</code> 才能重新 SELECT；引擎測試 <code>redundant_selects()==0</code> 把關。</p>
+    </div>
+  </div>
+
+  <!-- ============ P4 ============ -->
+  <div class="card" id="p4">
+    <div class="head">
+      <span class="tag" style="background:var(--p4);color:#0c111c">P4</span>
+      <span class="ttl">候選未依資料夾分組排序 —— 它讓 P2／P3 失效</span>
+      <span class="meta">
+        <span class="badge new">新發現</span>
+        <span class="badge">影響：放大器</span>
+        <span class="badge">工：極低</span>
+        <span class="badge">風險：零</span>
+      </span>
+    </div>
+    <div class="body">
+      <h3>問題</h3>
+      <p><code>execute</code> 照 <strong>CSV 原始列序</strong>逐列搬（<code>classifier.py:160</code>）。如果使用者的工作表來源夾是交錯的（A、B、A、B…），那麼：</p>
+      <ul class="tight">
+        <li>P3 的「記住已選夾」會<strong>一直被打斷</strong>（選 A→選 B→又選 A…每次都得重 SELECT）。</li>
+        <li>P2 的「同夾批次 MOVE」也<strong>湊不成一組</strong>（相鄰兩列不同夾就無法合併）。</li>
+      </ul>
+
+      <h3>情景演示（4 列：INBOX、Promo、INBOX、Promo）</h3>
+      <div class="grid2">
+        <div class="box before">
+          <h4>Before · 交錯 → 選取狂翻</h4>
+          <div class="seq">SELECT INBOX → MOVE
+SELECT Promo → MOVE   <span class="emph">切夾</span>
+SELECT INBOX → MOVE   <span class="emph">切回</span>
+SELECT Promo → MOVE   <span class="emph">又切</span>
+= 8 次往返、0 封能批次</div>
+        </div>
+        <div class="box after">
+          <h4>After · 先排序 → 同夾相鄰</h4>
+          <div class="seq">sort by (current → target)
+SELECT INBOX → MOVE 1,3   <span style="color:#7ef0b6">批次</span>
+SELECT Promo → MOVE 2,4   <span style="color:#7ef0b6">批次</span>
+= 4 次往返、可批次</div>
+        </div>
+      </div>
+
+      <h3>改法</h3>
+      <p>執行前一行<strong>純本地排序</strong>，零網路、零風險：<code>cands.sort(key=lambda it:(it.row.current_folder, it.row.target_folder))</code>。</p>
+      <div class="key">💡 <b>P4 是 P2／P3 的「前置乘數」</b>——它本身省不了多少，但<strong>沒有它，P2／P3 在真實交錯資料上會大打折扣</strong>。所以建議<u>第一個做</u>。</div>
+    </div>
+  </div>
+
+  <!-- ============ P5 ============ -->
+  <div class="card" id="p5">
+    <div class="head">
+      <span class="tag" style="background:var(--p5);color:#0c111c">P5</span>
+      <span class="ttl"><code>list_headers</code> 重連會「整夾重抓」，是浪費放大器</span>
+      <span class="meta">
+        <span class="badge new">新發現</span>
+        <span class="badge">影響：中（尾端斷線時很痛）</span>
+        <span class="badge">工：中高</span>
+        <span class="badge">風險：中</span>
+      </span>
+    </div>
+    <div class="body">
+      <h3>問題</h3>
+      <p><code>_with_reconnect</code> 包住<strong>整個</strong> <code>_list_headers_impl</code>（<code>imap_client.py:288</code>，docstring 明載「整批重抓」）。對功能1 匯出／功能2 列標題這種<strong>真的需要全表頭</strong>的路徑（P1 救不到），一旦在尾端斷線，<u>前面抓好的全部作廢、從頭再來</u>。</p>
+
+      <h3>情景演示（匯出 10,000 封，在第 199/200 批 token 過期）</h3>
+      <div class="seq">Before:  批1 ✓ 批2 ✓ … 批199 ✓  ← <span class="emph">斷線！</span>  重連後 → 批1 批2 … 批200  <span style="color:#ff8e8e">(整整 199 批白抓)</span>
+After :  批1 ✓ 批2 ✓ … 批199 ✓  ← 斷線  重連後 → <span style="color:#7ef0b6">只續抓 批200</span>  (跳過已取得的 UID)</div>
+
+      <h3>改法</h3>
+      <ul class="tight">
+        <li>把「已取得的 UID」記為集合；重連後重 <code>SELECT</code> + <code>UID SEARCH ALL</code>，<strong>只 FETCH 還沒抓到的 UID</strong> 續完。</li>
+        <li>唯讀、以 UID 為鍵 → 續抓<strong>冪等且安全</strong>。</li>
+        <li><b>鐵則</b>：重連後若 <code>UIDVALIDITY</code> 變了（信箱被重建），代表 UID 空間整個換了 → 必須<strong>放棄續抓、整批重來</strong>（這時重抓才是正確的）。</li>
+      </ul>
+      <p class="sub">套用 P1 後，<em>分類</em>路徑已改用單次 SEARCH（重抓很便宜），所以 P5 的價值主要落在<strong>匯出大信箱</strong>。優先序因此排在 P1/P3 之後。</p>
+    </div>
+  </div>
+
+  <!-- ============ P6 ============ -->
+  <div class="card" id="p6">
+    <div class="head">
+      <span class="tag" style="background:var(--p6);color:#0c111c">P6</span>
+      <span class="ttl">FETCH 批量大小寫死、不可調</span>
+      <span class="meta">
+        <span class="badge new">新發現</span>
+        <span class="badge">影響：低</span>
+        <span class="badge">工：低</span>
+        <span class="badge">風險：低</span>
+      </span>
+    </div>
+    <div class="body">
+      <h3>問題 & 改法</h3>
+      <p><code>_FETCH_BATCH = 50</code> 是模組常數（<code>imap_client.py:39</code>），<strong>不在</strong> <code>config.json</code> 可覆寫範圍（R7 只開放了失敗門檻／退避秒數）。Outlook 可吞更大的 UID 集合；把批量調大可減往返。</p>
+      <div class="grid2">
+        <div class="box">
+          <h4 style="color:#9fb3d6">批量 50（現況）</h4>
+          <div class="seq">10,000 / 50 = <b>200</b> 批 FETCH</div>
+        </div>
+        <div class="box">
+          <h4 style="color:#9fb3d6">批量 200（可調）</h4>
+          <div class="seq">10,000 / 200 = <b>50</b> 批 FETCH</div>
+        </div>
+      </div>
+      <ul class="tight">
+        <li>把批量納入 <code>config.json</code>（沿用既有 config_store 的「無效則退回安全預設」模式）。</li>
+        <li><b>取捨</b>：批量越大 → 往返越少，但<strong>進度更新越粗</strong>、單次回應記憶體越大。給個合理上限即可。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============ P7 ============ -->
+  <div class="card" id="p7">
+    <div class="head">
+      <span class="tag" style="background:var(--p7);color:#0c111c">P7</span>
+      <span class="ttl">本地解析微優化（誠實標註：邊際效益）</span>
+      <span class="meta">
+        <span class="badge new">新發現</span>
+        <span class="badge">影響：低</span>
+        <span class="badge">工：低</span>
+        <span class="badge">風險：低</span>
+      </span>
+    </div>
+    <div class="body">
+      <ul class="tight">
+        <li><b>表頭解析</b>：<code>email.message_from_bytes</code>（<code>imap_client.py:326</code>）走的是「全訊息」解析機制；我們只 PEEK 表頭欄位，可改 <code>email.parser.BytesHeaderParser</code> 省一點 CPU。<span class="sub">（屬微優化，往返沒變，只有超大信箱才感受得到。）</span></li>
+        <li><b>誠實澄清誤報</b>：<code>_decode_mutf7</code> 雖被知識圖譜複雜度指標標為「迴圈內線性掃描 / 配置」熱點，但它<strong>只在列資料夾（LIST）時跑、非每封郵件</strong>——實務上<u>不是瓶頸，不需要動</u>。把它列出來是為了說明「指標會誤報，仍需讀碼判斷」。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============ ALREADY GOOD ============ -->
+  <h2>已經做對、不需要再優化的部分</h2>
+  <table>
+    <tr><th style="width:30%">機制</th><th>現況（已是好的）</th></tr>
+    <tr><td>連線重用</td><td>單一連線貫穿全程，<strong>沒有</strong>逐操作重連的浪費。</td></tr>
+    <tr><td>報告 ↔ 執行 不二次掃描</td><td><code>ClassifyCache.source_uids</code> 讓「資料夾清單」與「來源夾 UID 集合」各只讀一次（FR-007），執行階段重用、<code>present.discard</code> 維持快取鮮活。<span class="s">P1 是在此基礎上「連那一次也從 FETCH 降成 SEARCH」。</span></td></tr>
+    <tr><td>新建目標夾</td><td><code>execute</code> 用 <code>existing</code> 集合守門，每個新目標夾只 <code>ensure_folder</code> 一次。</td></tr>
+  </table>
+
+  <!-- ============ ROADMAP ============ -->
+  <h2 id="road">建議落地順序與流程約束</h2>
+  <div class="barwrap">
+    <div class="barrow"><span class="lab" style="width:60px">①</span><span class="track"><span class="fill" style="width:18%;background:var(--p4)">P4 排序（零風險前置）</span></span></div>
+    <div class="barrow"><span class="lab" style="width:60px">②</span><span class="track"><span class="fill" style="width:55%;background:var(--p1)">P1 classify 最大刀（FETCH→SEARCH）</span></span></div>
+    <div class="barrow"><span class="lab" style="width:60px">③</span><span class="track"><span class="fill" style="width:38%;background:var(--p3);color:#0c111c">P3／C2 搬移砍半（_ensure_selected）</span></span></div>
+    <div class="barrow"><span class="lab" style="width:60px">④</span><span class="track"><span class="fill" style="width:70%;background:var(--p2)">P2 批次 MOVE（含 C1 冪等性一起設計）</span></span></div>
+    <div class="barrow"><span class="lab" style="width:60px">⑤</span><span class="track"><span class="fill" style="width:48%;background:var(--p5);color:#0c111c">P5 可續傳重連（匯出大信箱）</span></span></div>
+    <div class="barrow"><span class="lab" style="width:60px">⑥</span><span class="track"><span class="fill" style="width:20%;background:var(--p6);color:#0c111c">P6 批量可調</span></span></div>
+  </div>
+
+  <div class="key">
+    <b>程序約束（CLAUDE.md §2 / §4 / §7）：</b>
+    <ul class="tight" style="margin-top:6px">
+      <li>以上皆<strong>產品碼</strong>變更 → 開新 feature 分支 <code>NNN-name</code>，走 <code>/speckit.specify → clarify → plan → tasks → analyze → implement → SR</code>，升版 + 更新 <code>CHANGELOG</code>。</li>
+      <li>任何跨 seam 改動<strong>必須用 IMAP 模擬器引擎實測</strong>，以 <code>loop_report()</code> / <code>redundant_selects()</code> / <code>assert_all_fetches_request_uid()</code> 驗證「往返真的變少、且沒破壞 UID 索取與破壞性動作安全」。</li>
+      <li>P1／P2／P3／P5 與 backlog 的 <span class="badge bk">R7-followup C1（fallback move 冪等性）</span> <span class="badge bk">C2（重 SELECT）</span> 高度相關——<strong>若要動搬移路徑，建議把 C1、C2 併入同一 feature</strong>，避免反覆改 <code>_move_impl</code>。</li>
+    </ul>
+  </div>
+
+  <h2>修訂紀錄</h2>
+  <table>
+    <tr><th style="width:110px">日期</th><th style="width:90px">版本基準</th><th>變更</th></tr>
+    <tr><td>2026-06-27</td><td>v0.6.0</td><td>首次評估：P1–P7 解說、情景演示、前後對比圖（往返數為估計值）。</td></tr>
+    <tr><td>2026-06-28</td><td>v0.6.0</td><td>加入 <b>IMAP 模擬器實測基準</b>（分類 1,205 往返／200 FETCH／499 redundant SELECT／500 MOVE／下傳 1.63MB；匯出 204）、<b>狀態追蹤表</b>＋維護準則、修訂紀錄。實測證實估計方向正確。</td></tr>
+  </table>
+
+  <div class="foot">
+    MailKeeper 效能優化報告 · P1–P7 ｜ 來源：知識圖譜熱點分析 + <code>src/mailkeeper/{imap_client,classifier,cli,config}.py</code> 實際讀碼 + <code>tests/imap_server.py</code> 線級引擎實測 ｜
+    living doc：絕對值依伺服器能力與批量設定而定，重點在相對縮減。<b>每完成一項優化，請依「狀態追蹤」維護準則回填狀態／版本號並同步相關文件。</b>
+  </div>
+
+</div>
+</body>
+</html>
