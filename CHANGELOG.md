@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.2] - 2026-06-29
+### Changed — 大量分類搬移效能（feature 007，P4 分組 + P3 免重 SELECT + P2 批次 MOVE）
+- **分類搬移批次化**：候選依 (來源夾,目標夾) 穩定分組，同群以 `UID MOVE <set>` 批次搬移（超過 `MOVE_BATCH_MAX=200` 分塊），批次失敗退逐封以精確歸因；500 封同夾搬移的搬移往返由「每封一次」降為「每批一次」（N→⌈N/批⌉）。
+- **免重複 SELECT**：`OutlookIMAPClient` 追蹤目前選取的 `(資料夾, 讀寫模式)`，同夾連續操作不重選（連線/重連重置）；同夾搬移迴圈的多餘 SELECT 由 N→0。
+- 新增**後端中立** `MailBackend.move_many`（批次搬移，回 `{uid: None/錯誤}`）；分類結果依**原 CSV 工作表列序**呈現（內部分組處理）。早停改**連線層級**：單列資料失敗不再提前停止（移除連續失敗計數）；`max_consecutive_failures` 保留為 inert/deprecated。
+### Fixed
+- **後備搬移冪等（backlog C1）**：伺服器不支援 `UID MOVE` 的後備路徑（copy→標刪→UID EXPUNGE），於「COPY 成功後、清除前」斷線重試**不再產生重複複本**——重試前以目標夾 `Message-ID` 去重（涵蓋「copy 後/標刪前」與「標刪後/expunge 前」兩窗口）；來源仍正確移除、他人已標 `\Deleted` 郵件不被波及。
+### Tests
+- 跨 seam 走 IMAP 模擬器引擎：擴充 `_uid_move` 支援 UID 集合、母版郵件帶 `Message-ID`、`HEADER Message-ID` 搜尋保真（對拍真 imaplib）；驗 `redundant_selects()==0`、批次 `UID MOVE` 計數、後備冪等（snapshot 目標複本==1）、重連 0 重複/0 遺漏、他人 `\Deleted` 不被波及。271 passed，全程離線、雙層驗證。
+
 ## [0.6.1] - 2026-06-28
 ### Changed — 大量信箱分類效能（feature 006，P1 存在性檢查最小化）
 - **分類「檢查報告」不再整夾抓標頭**：判斷來源郵件是否存在，改為只取「來源夾現存 UID 集合」（一次 `UID SEARCH ALL`），取代原本下載並解析整夾完整標頭再幾乎全丟的浪費。實測 10,000 封來源夾的報告階段：~200 批 FETCH → **1 次 SEARCH**、下傳 ~1.63 MB → 僅 UID 清單（降幅 **≥90%**）；逐列判定與搬移結果**等價現況**。「現存」沿用 `UID SEARCH ALL` 語意（含已標 `\Deleted` 未 expunge 者）。

@@ -936,24 +936,37 @@ class ImapServer:
 
     # ---------- handlers：UID MOVE / COPY / STORE / EXPUNGE（破壞性，鏡像 FakeIMAPConn 語意）----------
     def _uid_move(self, tag: bytes, tail: bytes) -> bytes:
+        # 支援單一 UID 或 UID 集合（批次：'101,102,103' / '101:108'）——真實 UID MOVE 接受 sequence set。
         uid_s, _, dest_b = tail.partition(b" ")
         dest = _unquote(dest_b.decode("utf-8", "replace"))
-        uid = int(uid_s)
+        label = uid_s.decode("ascii", "replace")
+        uids = _parse_uidset(uid_s)
         if not self._supports_move:
-            self._record(tag, "UID MOVE", (uid_s.decode(), dest), self._selected, (), "NO", None)
+            self._record(tag, "UID MOVE", (label, dest), self._selected, (), "NO", None)
             return self._tagged(tag, "NO", "MOVE not supported")
         src = self._sel_name()
         if dest not in self.mailboxes:
-            self._record(tag, "UID MOVE", (uid_s.decode(), dest), src, (), "NO", "TRYCREATE")
+            self._record(tag, "UID MOVE", (label, dest), src, (), "NO", "TRYCREATE")
             return self._tagged(tag, "NO", "[TRYCREATE] Mailbox doesn't exist")
-        m = self._find(src, uid)
-        if m is None:
-            self._record(tag, "UID MOVE", (uid_s.decode(), dest), src, (), "NO", None)
+        moved: list[int] = []
+        dest_uids: list[int] = []
+        for uid in uids:
+            m = self._find(src, uid)
+            if m is None:
+                continue  # 集合中不存在者略過（真實伺服器搬其餘、整體仍 OK）
+            self.mailboxes[src].remove(m)
+            copy = self._append_copy(dest, m)
+            moved.append(uid)
+            dest_uids.append(copy.uid)
+        if not moved:
+            self._record(tag, "UID MOVE", (label, dest), src, (), "NO", None)
             return self._tagged(tag, "NO", "No matching message")
-        self.mailboxes[src].remove(m)
-        copy = self._append_copy(dest, m)
-        self._record(tag, "UID MOVE", (uid_s.decode(), dest), src, (uid,), "OK", "COPYUID")
-        return self._tagged(tag, "OK", f"[COPYUID {self._uidvalidity.get(dest, 1)} {uid} {copy.uid}] MOVE completed")
+        self._record(tag, "UID MOVE", (label, dest), src, tuple(moved), "OK", "COPYUID")
+        srcset = ",".join(str(u) for u in moved)
+        dstset = ",".join(str(u) for u in dest_uids)
+        return self._tagged(
+            tag, "OK", f"[COPYUID {self._uidvalidity.get(dest, 1)} {srcset} {dstset}] MOVE completed"
+        )
 
     def _uid_copy(self, tag: bytes, tail: bytes) -> bytes:
         uid_s, _, dest_b = tail.partition(b" ")

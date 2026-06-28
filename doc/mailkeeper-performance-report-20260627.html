@@ -97,7 +97,7 @@
   <p class="sub">P1–P7 精緻解說 · 情景演示 · 前後對比圖 · 量化效果 &nbsp;|&nbsp; 基於知識圖譜熱點 + 實際讀碼 + IMAP 模擬器實測，非臆測</p>
   <p class="sub">
     <span class="pill">評估日期：2026-06-27</span>
-    <span class="pill">最後更新：2026-06-28（P1 已完成 v0.6.1 · feature 006）</span>
+    <span class="pill">最後更新：2026-06-29（P2/P3/P4 已完成 v0.6.2 · feature 007；backlog C1/C2 已修）</span>
     <span class="pill">適用版本基準：v0.6.0</span>
     <span class="pill">文件性質：living doc（完成優化須回填狀態與版本號）</span>
   </p>
@@ -199,14 +199,14 @@
   <table>
     <tr><th style="width:46px">項目</th><th>名稱</th><th style="width:88px">影響</th><th style="width:110px">狀態</th><th style="width:96px">完成版本</th><th>對應 feature / 備註</th></tr>
     <tr><td><b style="color:var(--p1)">P1</b></td><td>存在性檢查改 UID SEARCH（不抓全表頭）</td><td>最高</td><td>✅ 已完成</td><td><b>v0.6.1</b></td><td>feature 006（<code>list_uids</code>）；報告階段整夾 FETCH=0、下載降 ≥90%</td></tr>
-    <tr><td><b style="color:var(--p4)">P4</b></td><td>候選分組排序（前置乘數）</td><td>放大器</td><td>🔲 未實作</td><td>—</td><td>延至 P2/P3（feature 006 已決議延後：move 路徑未改前無往返效益）</td></tr>
-    <tr><td><b style="color:var(--p3)">P3</b></td><td>免重複 SELECT（<code>_ensure_selected</code>）</td><td>中</td><td>🔲 未實作</td><td>—</td><td>= backlog <b>C2</b>；動搬移路徑建議併 C1</td></tr>
-    <tr><td><b style="color:var(--p2)">P2</b></td><td>批次 UID MOVE</td><td>高</td><td>🔲 未實作</td><td>—</td><td>與 backlog <b>C1</b>（fallback 冪等性）一起設計</td></tr>
+    <tr><td><b style="color:var(--p4)">P4</b></td><td>候選分組排序（前置乘數）</td><td>放大器</td><td>✅ 已完成</td><td><b>v0.6.2</b></td><td>feature 007（依 (來源,目標) 分組、輸出還原 CSV 序）</td></tr>
+    <tr><td><b style="color:var(--p3)">P3</b></td><td>免重複 SELECT（<code>_ensure_selected</code>）</td><td>中</td><td>✅ 已完成</td><td><b>v0.6.2</b></td><td>feature 007（= backlog <b>C2</b> 已修）；同夾 redundant_selects→0</td></tr>
+    <tr><td><b style="color:var(--p2)">P2</b></td><td>批次 UID MOVE</td><td>高</td><td>✅ 已完成</td><td><b>v0.6.2</b></td><td>feature 007（`move_many`，UID MOVE 集合分塊、批次失敗退逐封）</td></tr>
     <tr><td><b style="color:var(--p5)">P5</b></td><td>重連可續傳（不整夾重抓）</td><td>中</td><td>🔲 未實作</td><td>—</td><td>主要利匯出大信箱</td></tr>
     <tr><td><b style="color:var(--p6)">P6</b></td><td>FETCH 批量大小可調</td><td>低</td><td>🔲 未實作</td><td>—</td><td>納入 <code>config.json</code></td></tr>
     <tr><td><b style="color:var(--p7)">P7</b></td><td>表頭解析微優化</td><td>低</td><td>🔲 未實作</td><td>—</td><td>邊際效益；<code>_decode_mutf7</code> 為指標誤報</td></tr>
   </table>
-  <p class="sub">關聯 backlog（產品韌性，需動搬移路徑時一併處理）：<span class="badge bk">C1 fallback move 冪等性</span> <span class="badge bk">C2 重 SELECT（= P3）</span>。狀態圖例：🔲 未實作 · 🚧 進行中 · ✅ 已完成 vX.Y.Z。</p>
+  <p class="sub">關聯 backlog：<span class="badge" style="color:#7ef0b6;border-color:#27543a">C1 fallback move 冪等性 ✅ 已修 v0.6.2</span> <span class="badge" style="color:#7ef0b6;border-color:#27543a">C2 重 SELECT（= P3）✅ 已修 v0.6.2</span>。狀態圖例：🔲 未實作 · 🚧 進行中 · ✅ 已完成 vX.Y.Z。</p>
 
   <!-- ============ P1 ============ -->
   <div class="card" id="p1">
@@ -536,6 +536,7 @@ After :  批1 ✓ 批2 ✓ … 批199 ✓  ← 斷線  重連後 → <span style
     <tr><td>2026-06-27</td><td>v0.6.0</td><td>首次評估：P1–P7 解說、情景演示、前後對比圖（往返數為估計值）。</td></tr>
     <tr><td>2026-06-28</td><td>v0.6.0</td><td>加入 <b>IMAP 模擬器實測基準</b>（分類 1,205 往返／200 FETCH／499 redundant SELECT／500 MOVE／下傳 1.63MB；匯出 204）、<b>狀態追蹤表</b>＋維護準則、修訂紀錄。實測證實估計方向正確。</td></tr>
     <tr><td>2026-06-28</td><td><b>v0.6.1</b></td><td><b>P1 落地</b>（feature 006）：分類存在性檢查改 <code>list_uids</code>（<code>UID SEARCH ALL</code>，含已標刪），報告階段整夾標頭 FETCH=0、下載降 ≥90%、判定/搬移等價現況；狀態表 P1→✅ 已完成。P4 確認延至 P2/P3。</td></tr>
+    <tr><td>2026-06-29</td><td><b>v0.6.2</b></td><td><b>P4+P3+P2 落地</b>（feature 007）：候選分組、免重複 SELECT（redundant_selects→0）、批次 `UID MOVE`（N→⌈N/批⌉）；後備搬移冪等以目標 Message-ID 去重（修 backlog C1）。狀態表 P2/P3/P4→✅、C1/C2→已修。271 tests 全綠。</td></tr>
   </table>
 
   <div class="foot">

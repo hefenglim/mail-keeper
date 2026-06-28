@@ -171,6 +171,7 @@ class OutlookIMAPClient:
         self._port = port if port is not None else config.IMAP_PORT
         self._timeout = timeout if timeout is not None else config.IMAP_TIMEOUT
         self._imap: imaplib.IMAP4_SSL | None = None
+        self._selected: tuple[str, bool] | None = None  # 目前選取的 (mailbox, readonly)；免重複 SELECT（P3）
         # R7 韌性：注入式 token 續期 / 狀態回呼 / 重連與重試上限（後端中立，維持 seam 純度）。
         self._token_provider = token_provider
         self._on_status = on_status
@@ -188,6 +189,7 @@ class OutlookIMAPClient:
         # XOAUTH2 認證字串格式 (注意是 \x01 控制字元，不是空白)
         auth_string = f"user={self._email}\x01auth=Bearer {self._token}\x01\x01"
         self._imap.authenticate("XOAUTH2", lambda _: auth_string.encode())
+        self._selected = None  # 新連線：尚未選取任何資料夾（重連後必重新 SELECT）
 
     # ---------- R7：透明重連 / 有界重試 ----------
     def _status(self, msg: str) -> None:
@@ -263,6 +265,14 @@ class OutlookIMAPClient:
             raise RuntimeError("尚未連線，請先呼叫 connect() 或使用 with。")
         return self._imap
 
+    def _ensure_selected(self, mailbox: str, readonly: bool = False) -> None:
+        """免重複 SELECT（P3/C2）：僅在未選／資料夾不同／讀寫模式不同時才 SELECT。
+        連線／重連後 `self._selected` 已重置為 None，故重連後必重新選取。"""
+        if self._selected == (mailbox, readonly):
+            return
+        self._conn.select(mailbox, readonly=readonly)
+        self._selected = (mailbox, readonly)
+
     # ---------- 讀取 ----------
     def list_folders(self) -> list[str]:
         """列舉信箱所有資料夾名稱（連線中斷會透明重連重試）。"""
@@ -290,7 +300,7 @@ class OutlookIMAPClient:
     def _list_headers_impl(
         self, folder: str = "INBOX", *, on_progress: Callable[[int, int], None] | None = None
     ) -> list[MailHeader]:
-        self._conn.select(folder, readonly=True)
+        self._ensure_selected(folder, readonly=True)
         typ, data = self._conn.uid("search", None, "ALL")  # type: ignore[arg-type]  # IMAP SEARCH 允許 charset=None
         if typ != "OK" or not data or data[0] is None:
             return []
@@ -357,7 +367,7 @@ class OutlookIMAPClient:
     def _list_uids_impl(
         self, folder: str = "INBOX", *, on_progress: Callable[[int, int], None] | None = None
     ) -> set[str]:
-        self._conn.select(folder, readonly=True)
+        self._ensure_selected(folder, readonly=True)
         typ, data = self._conn.uid("search", None, "ALL")  # type: ignore[arg-type]  # IMAP SEARCH 允許 charset=None
         if typ != "OK" or not data or data[0] is None:
             return set()
@@ -389,28 +399,113 @@ class OutlookIMAPClient:
         self._with_reconnect(lambda: self._move_impl(uid, dest_folder, mailbox))
 
     def _move_impl(self, uid: str, dest_folder: str, mailbox: str) -> None:
-        self._conn.select(mailbox)
+        self._ensure_selected(mailbox)
         typ, _ = self._conn.uid("move", uid, dest_folder)
         if typ == "OK":
             return
 
-        # 後備方案（伺服器不支援 MOVE）：copy + 標刪 + UID EXPUNGE
-        typ, _ = self._conn.uid("copy", uid, dest_folder)
-        if typ != "OK":
-            raise BackendError(
-                f"搬移失敗：COPY 未成功（{typ}），已中止且未刪除來源郵件"
-                f"（uid={uid} → {dest_folder}）。請確認目標資料夾後重試。"
-            )
+        # 後備方案（伺服器不支援 MOVE）：**冪等** copy → 標刪 → UID EXPUNGE（C1）。
+        # 重試前先判前次進度，避免「COPY 後斷線重試 → 重複複本」：
+        if not self._uid_present(uid):
+            return  # 來源已無此 uid → 前次已完整搬走（no-op，重試安全）
+        if not self._dest_has_copy(uid, dest_folder, mailbox):
+            typ, _ = self._conn.uid("copy", uid, dest_folder)
+            if typ != "OK":
+                raise BackendError(
+                    f"搬移失敗：COPY 未成功（{typ}），已中止且未刪除來源郵件"
+                    f"（uid={uid} → {dest_folder}）。請確認目標資料夾後重試。"
+                )
         self._conn.uid("store", uid, "+FLAGS", "(\\Deleted)")
         typ, _ = self._conn.uid("expunge", uid)  # UID EXPUNGE：只清這封
         if typ != "OK":
             # 伺服器無 UIDPLUS：別無選擇只能整夾 EXPUNGE（此後備路徑仍可能波及其他已標刪郵件）。
             self._conn.expunge()
 
+    def _uid_present(self, uid: str) -> bool:
+        """來源（目前選取夾）是否仍有此 UID（後備搬移冪等的快路徑判定）。"""
+        typ, data = self._conn.uid("search", None, "UID", uid)  # type: ignore[arg-type]
+        return typ == "OK" and bool(data) and bool(data[0]) and uid.encode() in data[0].split()
+
+    def _message_id(self, uid: str) -> str | None:
+        """取來源該 UID 的 Message-ID（無則 None）。"""
+        typ, data = self._conn.uid("fetch", uid, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
+        if typ != "OK" or not data:
+            return None
+        for part in data:
+            if isinstance(part, tuple) and len(part) >= 2 and part[1]:
+                mid = email.message_from_bytes(part[1]).get("Message-ID")
+                if mid:
+                    return mid.strip()
+        return None
+
+    def _dest_has_copy(self, uid: str, dest_folder: str, mailbox: str) -> bool:
+        """後備搬移冪等（C1）：以 `Message-ID` 偵測目標夾是否已有此封（前次 COPY 殘留），避免重複複本。
+        無 `Message-ID` → 回 False（盡力 COPY，已知殘留）。查畢切回來源夾（讀寫）續做標刪/expunge。"""
+        mid = self._message_id(uid)
+        if not mid:
+            return False
+        typ, _ = self._conn.select(dest_folder, readonly=True)
+        self._selected = (dest_folder, True) if typ == "OK" else None
+        try:
+            if typ != "OK":
+                return False  # 目標夾無法選取（如不存在）→ 視為無複本，交由後續 COPY（會得 TRYCREATE）
+            typ, data = self._conn.uid("search", None, "HEADER", "Message-ID", mid)  # type: ignore[arg-type]
+            return typ == "OK" and bool(data) and bool(data[0]) and bool(data[0].split())
+        finally:
+            self._ensure_selected(mailbox)  # 切回來源（讀寫）續做 COPY/標刪/expunge
+
+    def move_many(
+        self, uids: list[str], dest_folder: str, mailbox: str = "INBOX"
+    ) -> dict[str, str | None]:
+        """批次搬移多封（同來源夾→同目標夾）。回傳 ``{uid: None 成功 / 錯誤訊息 失敗}``。
+
+        以 ``UID MOVE <uid 集合>`` 批次（超過 ``config.MOVE_BATCH_MAX`` 分塊），免重複 SELECT。
+        批次未成功（伺服器不支援 MOVE 或拒絕）→ 對該塊**退回逐封** `_move_impl` 以精確歸因，
+        單封失敗不連坐同批其他封。連線中斷透明重連並重試整批（UID MOVE 冪等、後備路徑亦冪等）；
+        連線層級失敗（重連用盡）與 `ReauthRequired` 往外拋（不計入單列失敗）。
+
+        已知 TOCTOU（SR F2，可接受）：批次 `UID MOVE` 對「報告後、執行前被外部刪除」的 uid，
+        伺服器靜默略過仍回 OK，本方法將其記為成功（None）。執行前的 cache 存在性檢查已過濾絕大多數；
+        此窗口極窄且不造成資料不安全（該封本就已不在來源），故不解析 COPYUID srcset 逐封核對。
+        """
+        return self._with_reconnect(lambda: self._move_many_impl(list(uids), dest_folder, mailbox))
+
+    def _move_many_impl(
+        self, uids: list[str], dest_folder: str, mailbox: str
+    ) -> dict[str, str | None]:
+        results: dict[str, str | None] = {}
+        for batch in _chunked(uids, config.MOVE_BATCH_MAX):
+            self._ensure_selected(mailbox)
+            try:
+                typ, _ = self._conn.uid("move", ",".join(batch), dest_folder)
+            except ReauthRequired:
+                raise
+            except Exception as exc:
+                if self._is_session_lost(exc):
+                    raise  # 連線層級 → 交由 _with_reconnect 重連重試整批
+                typ = "NO"  # 非連線類錯誤（如 imaplib 對 BAD 拋出）→ 視同批次未成功，退逐封歸因
+                #            （SR F1：絕不讓非連線錯誤被上層當「連線層級早停」而靜默丟棄其餘列）
+            if typ == "OK":
+                for u in batch:
+                    results[u] = None
+                continue
+            # 批次未成功 → 退回逐封以精確歸因（單封 _move_impl 含後備路徑）
+            for u in batch:
+                try:
+                    self._move_impl(u, dest_folder, mailbox)
+                    results[u] = None
+                except ReauthRequired:
+                    raise
+                except Exception as exc:
+                    if self._is_session_lost(exc):
+                        raise  # 連線層級 → 交由 _with_reconnect 重連重試整批
+                    results[u] = str(exc)
+        return results
+
     def mark_read(self, uid: str, mailbox: str = "INBOX") -> None:
-        self._conn.select(mailbox)
+        self._ensure_selected(mailbox)
         self._conn.uid("store", uid, "+FLAGS", "(\\Seen)")
 
     def flag(self, uid: str, mailbox: str = "INBOX") -> None:
-        self._conn.select(mailbox)
+        self._ensure_selected(mailbox)
         self._conn.uid("store", uid, "+FLAGS", "(\\Flagged)")

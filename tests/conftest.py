@@ -87,6 +87,17 @@ class FakeBackend:
         self._folders[mailbox] = [h for h in src if h.uid != uid]
         self._folders.setdefault(dest_folder, []).extend(moved)
 
+    def move_many(self, uids, dest_folder: str, mailbox: str = "INBOX") -> dict:
+        out: dict = {}
+        for uid in uids:
+            present = {h.uid for h in self._folders.get(mailbox, [])}
+            if uid in present:
+                self.move(uid, dest_folder, mailbox)
+                out[uid] = None
+            else:
+                out[uid] = "來源 UID 不存在"
+        return out
+
     def mark_read(self, uid: str, mailbox: str = "INBOX") -> None:
         self.actions.append(("read", uid))
 

@@ -55,7 +55,7 @@ def test_full_simulation_regression_loop(monkeypatch):
     items = classifier.build_report(client, rows, cache=cache)
 
     # 3) 執行搬移，第 3 次 move 中途 token 過期 → 透明重連後從中斷處續完
-    server.arm_expiry(before_op="move", nth=3, mode="eof")
+    server.arm_expiry(before_op="move", nth=1, mode="eof")
     results = classifier.execute(client, items, cache=cache)
 
     # 第一層（log 分析）：全部成功、重連發生、整夾標頭零冗餘、UID 不變量、4 次搬移
@@ -65,7 +65,7 @@ def test_full_simulation_regression_loop(monkeypatch):
     assert rep["redundant_full_folder_reads"] == {}                      # 讀取迴圈零冗餘
     assert rep["fetches_per_folder"] == {}                               # P1：存在性改 UID SEARCH、零整夾標頭抓取
     assert rep["command_counts"].get("UID SEARCH") == 1                  # INBOX 現存查詢一次（重連後重用 cache）
-    assert rep["command_counts"]["UID MOVE"] == 4                        # 4 封各成功搬移（失敗的那次未記錄）
+    assert rep["command_counts"]["UID MOVE"] >= 2                        # 批次搬移（含重連重試該批）
     server.assert_all_fetches_request_uid()
 
     # 第二層（快照）：3 進 Archive、1 進 Work/Projects、他人 \Deleted(106) 不被波及、四封都離開 INBOX
@@ -98,7 +98,7 @@ def test_bulk_classify_reads_each_source_folder_once(monkeypatch):
     assert rep["fetches_per_folder"] == {}                     # P1：存在性改 UID SEARCH、零整夾標頭抓取
     assert rep["command_counts"].get("UID SEARCH") == 1       # INBOX 現存查詢只一次（4 列共用快取）
     assert rep["command_counts"].get("LIST") == 1             # 資料夾清單只讀一次
-    assert rep["command_counts"].get("UID MOVE") == 4         # 四列各一次搬移
+    assert rep["command_counts"].get("UID MOVE") == 1         # 四列同 (INBOX→Archive) 一批搬移
     server.assert_all_fetches_request_uid()                    # 每個 FETCH 都索取 UID
 
     # 第二層：四封進 Archive、他人 \Deleted(106) 全程不被波及
@@ -120,8 +120,8 @@ def test_multibatch_fetch_over_100_messages_drives_progress(monkeypatch):
     assert any(h.subject == "批量信件 CJK" for h in headers)
 
 
-def test_bottleneck_surfaces_redundant_select_waste(monkeypatch):
-    # 分析助手深化：分類迴圈每封 move 前都重 SELECT 來源夾（同夾同模式）→ bottleneck 點出可省的重複
+def test_move_loop_avoids_redundant_select(monkeypatch):
+    # feature 007 (P3/C2)：分類迴圈對同來源夾連續搬移，靠 _ensure_selected 不重複 SELECT
     server = fresh_server()
     client = connected_client(monkeypatch, server)
     cache = classifier.ClassifyCache()
@@ -132,11 +132,10 @@ def test_bottleneck_surfaces_redundant_select_waste(monkeypatch):
     )
     items = classifier.build_report(client, rows, cache=cache)
     classifier.execute(client, items, cache=cache)
-    # 3 封 → 3 次讀寫 SELECT INBOX，後 2 次是對「已選同模式」夾的重複（首次 EXAMINE→SELECT 模式切換不算）
-    assert server.redundant_selects() == 2
+    # 同夾同模式不重選：3 封搬移只首次 SELECT INBOX（讀寫），其餘跳過
+    assert server.redundant_selects() == 0
     bn = server.bottleneck()
-    assert bn["redundant_selects"] == 2 and bn["redundant_full_folder_reads"] == {}
-    assert bn["most_frequent_command"] in ("SELECT", "UID MOVE")
+    assert bn["redundant_selects"] == 0 and bn["redundant_full_folder_reads"] == {}
 
 
 def test_redundant_refetch_would_be_caught_by_log(monkeypatch):
@@ -254,3 +253,25 @@ def test_list_headers_still_full_headers_not_minimized(monkeypatch):
     assert any("報告" in h.subject for h in headers)            # CJK encoded-word 主旨仍解碼（有內容）
     assert server.command_count("UID FETCH") >= 1               # 內容路徑仍做標頭 FETCH（未被最小化）
     assert server.command_count("UID SEARCH") >= 1              # 仍先 SEARCH 取 UID 再分批 FETCH
+
+
+def test_move_many_batches_uid_move(monkeypatch):
+    # feature 007 (P2)：move_many 同群以單一 UID MOVE 批次、免重複 SELECT
+    server = fresh_server()
+    client = connected_client(monkeypatch, server)
+    before = len(server.mailboxes["Archive"])
+    uids = [str(u) for u in range(101, 109)]                     # INBOX 8 封
+    out = client.move_many(uids, "Archive", "INBOX")
+    assert out == {u: None for u in uids}
+    assert server.command_count("UID MOVE") == 1                 # 8 封一批
+    assert server.redundant_selects() == 0
+    assert len(server.mailboxes["Archive"]) == before + 8 and server.mailboxes["INBOX"] == []
+
+
+def test_move_many_chunks_at_cap(monkeypatch):
+    # feature 007 (FR-014)：超過 MOVE_BATCH_MAX 分塊為多批
+    monkeypatch.setattr("mailkeeper.config.MOVE_BATCH_MAX", 3)
+    server = fresh_server()
+    client = connected_client(monkeypatch, server)
+    client.move_many([str(u) for u in range(101, 109)], "Archive", "INBOX")  # 8 封 → ⌈8/3⌉=3 批
+    assert server.command_count("UID MOVE") == 3

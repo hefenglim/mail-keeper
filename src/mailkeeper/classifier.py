@@ -137,50 +137,83 @@ def execute(
     on_progress: Callable[[int, int], None] | None = None,
     progress: ReporterFactory | None = None,
     cache: ClassifyCache | None = None,
-    max_consecutive_failures: int | None = None,
+    max_consecutive_failures: int | None = None,  # deprecated/inert（feature 007）：不再驅動早停
 ) -> list[MoveResult]:
-    """對可行候選逐列搬移：目標不存在則自動建立；來源 UID 執行時已不存在則回報失敗。
+    """對可行候選**分組批次**搬移：依 (來源夾, 目標夾) 穩定分組、同群以 ``move_many`` 批次搬移；
+    結果依**原 CSV 工作表列序**回傳（FR-002）。目標夾不存在則自動建立；來源 UID 執行時已不存在
+    則該列回報失敗（不連坐同批其他封）。
 
-    每處理完一個候選（成功或失敗）即回報進度 ``on_progress(done, total)``。
-    來源夾現存 UID 取自共用 ``cache``（報告階段已讀即重用、不二次整夾掃描；FR-007）。
-    ``ReauthRequired`` 不當作單列失敗——往外傳，由 cli 乾淨停止並回報已完成/未完成（FR-004）。
-    連續失敗達 ``max_consecutive_failures``（預設取自設定）→ 提前停止，不對死連線狂試。
+    每處理完一個候選即回報進度 ``on_progress(done, total)``。來源夾現存 UID 取自共用 ``cache``
+    （報告階段已讀即重用、不二次整夾掃描）。**早停改連線層級**：單列資料失敗只記為失敗列、繼續
+    處理；``ReauthRequired`` 往外傳（cli 乾淨停止、由 ``on_progress`` 回報已完成數）；其他連線層級
+    失敗（``move_many`` 因重連用盡而拋出）→ 停止並回傳已處理結果。``max_consecutive_failures``
+    已停用（保留參數僅為向後相容）。
     """
     cache = cache if cache is not None else ClassifyCache()
     make = progress or _noop_reporter
-    limit = (
-        max_consecutive_failures
-        if max_consecutive_failures is not None
-        else config.MAX_CONSECUTIVE_FAILURES
-    )
     existing = _folders(backend, cache)
     cands = candidates(items)
     total = len(cands)
-    results: list[MoveResult] = []
+    results: dict[int, MoveResult] = {}
+    done = 0
 
-    consecutive_failures = 0
-    for done, it in enumerate(cands, 1):
-        row = it.row
-        ok = False
-        try:
-            if row.target_folder not in existing:
-                backend.ensure_folder(row.target_folder)
-                existing.add(row.target_folder)
-            present = _source_uids(backend, row.current_folder, cache, make)
-            if row.uid not in present:
-                results.append(MoveResult(row, False, "來源 UID 在執行時已不存在"))
-            else:
-                backend.move(row.uid, row.target_folder, row.current_folder)
-                present.discard(row.uid)  # 搬走即更新快取（不重抓整夾）
-                results.append(MoveResult(row, True))
-                ok = True
-        except ReauthRequired:
-            raise  # 需重新登入 → 終結整體；由 cli 乾淨停止 + 回報已完成/未完成
-        except Exception as exc:  # 單列失敗不影響其他列、不崩潰
-            results.append(MoveResult(row, False, str(exc)))
+    def _advance() -> None:
+        nonlocal done
+        done += 1
         if on_progress is not None:
             on_progress(done, total)
-        consecutive_failures = 0 if ok else consecutive_failures + 1
-        if consecutive_failures >= limit:
-            break  # 疑似連線中斷：提前停止；未處理者不在 results 中，由 cli 提示重試
-    return results
+
+    # 同一 (來源夾, uid) 只搬「CSV 首現者」；後續重複列視為失敗（等價現況：先到先搬，後者落空）
+    claimed: dict[tuple[str, str], int] = {}
+    dup: set[int] = set()
+    for i in range(len(cands)):
+        k = (cands[i].row.current_folder, cands[i].row.uid)
+        if k in claimed:
+            dup.add(i)
+        else:
+            claimed[k] = i
+    # 勝出者依 (來源夾, 目標夾) 穩定分組（同群相鄰、決定性）
+    winners = sorted(
+        (i for i in range(len(cands)) if i not in dup),
+        key=lambda i: (cands[i].row.current_folder, cands[i].row.target_folder),
+    )
+    pos = 0
+    while pos < len(winners):
+        key = (cands[winners[pos]].row.current_folder, cands[winners[pos]].row.target_folder)
+        end = pos
+        while end < len(winners) and (
+            cands[winners[end]].row.current_folder,
+            cands[winners[end]].row.target_folder,
+        ) == key:
+            end += 1
+        group = winners[pos:end]
+        src, tgt = key
+        if tgt not in existing:
+            backend.ensure_folder(tgt)
+            existing.add(tgt)
+        present = _source_uids(backend, src, cache, make)
+        to_move = [cands[i].row.uid for i in group if cands[i].row.uid in present]
+        try:
+            outcome = backend.move_many(to_move, tgt, src) if to_move else {}
+        except ReauthRequired:
+            raise  # 需重新登入 → 終結；cli 乾淨停止（已完成數由 on_progress 回報）
+        except Exception:
+            break  # 連線層級失敗（move_many 內重連已用盡）→ 停止，回傳已處理
+        for i in group:
+            row = cands[i].row
+            if row.uid not in present:
+                results[i] = MoveResult(row, False, "來源 UID 在執行時已不存在")
+            else:
+                err = outcome.get(row.uid)
+                if err is None:
+                    present.discard(row.uid)  # 搬走即更新快取（不重抓整夾）
+                    results[i] = MoveResult(row, True)
+                else:
+                    results[i] = MoveResult(row, False, err)
+            _advance()
+        pos = end
+    # CSV 重複列（uid 已被前列認領）→ 失敗
+    for i in sorted(dup):
+        results[i] = MoveResult(cands[i].row, False, "來源 UID 在執行時已不存在")
+        _advance()
+    return [results[i] for i in range(len(cands)) if i in results]
