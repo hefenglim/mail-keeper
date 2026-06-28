@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.3] - 2026-06-29
+### Changed — 大量信箱讀取的韌性與調校（feature 008，P5 重連可續傳 + P6 FETCH 批量可調 + P7 標頭解析微優化）
+- **P5 讀取重連可續傳**：`list_headers`（匯出工作表/列標題）於連線中斷／權杖過期後**從中斷處續抓**——重連後重新 `UID SEARCH ALL`、與已取得 UID 取差集只抓差集，不再整批重抓；同一 UIDVALIDITY 進度延續，UIDVALIDITY 變更（信箱重建）則捨棄過時進度安全整批重抓；有界重連（沿用 `max_reconnect_attempts`），用盡如實外拋（不靜默回傳不完整標頭）。
+- **P6 FETCH 批量可調**：`config.json` 新增可選 `fetch_batch_size`（預設 50、下限 1；無效/缺漏退預設、不崩潰）；每批 `UID FETCH` 封數可調，往返＝⌈N/批⌉。
+- **P7 標頭解析微優化**：讀標頭改用 header-only 解析（`email.parser.BytesHeaderParser`，只解析表頭、不建構 body 結構）；`MailHeader` 輸出（含 CJK/emoji/encoded-word 解碼、折行還原）逐字不變。
+### Tests
+- 跨 seam 走 IMAP 模擬器引擎：續抓不整批重抓（`UID FETCH` ≤⌈N/批⌉+1、不翻倍）、UIDVALIDITY 變更安全重抓、進度跨重連延續、重連用盡外拋、批量＝⌈N/M⌉、解析等價（母版 CJK/emoji/encoded-word/空主旨逐字）、續傳狀態無洩密。279 passed、離線、imap_client 92% 覆蓋。
+
 ## [0.6.2] - 2026-06-29
 ### Changed — 大量分類搬移效能（feature 007，P4 分組 + P3 免重 SELECT + P2 批次 MOVE）
 - **分類搬移批次化**：候選依 (來源夾,目標夾) 穩定分組，同群以 `UID MOVE <set>` 批次搬移（超過 `MOVE_BATCH_MAX=200` 分塊），批次失敗退逐封以精確歸因；500 封同夾搬移的搬移往返由「每封一次」降為「每批一次」（N→⌈N/批⌉）。

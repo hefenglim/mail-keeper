@@ -10,6 +10,10 @@
 """
 from __future__ import annotations
 
+import imaplib
+
+import pytest
+
 from imap_dataset import (
     INBOX_CJK_UID,
     INBOX_EMOJI_UID,
@@ -118,6 +122,92 @@ def test_multibatch_fetch_over_100_messages_drives_progress(monkeypatch):
     assert progress[0] == (50, 120) and progress[-1] == (120, 120)  # 50 → 100 → 120
     # 多批路徑也正確解碼 CJK encoded-word
     assert any(h.subject == "批量信件 CJK" for h in headers)
+
+
+def test_list_headers_resumable_skips_fetched_batches(monkeypatch):
+    # feature 008 (P5)：分批讀標頭中途斷線 → **續抓**（已取得批次不重抓），非整批重抓。
+    server = bulk_server(120)  # 預設 batch 50 → 3 批
+    server.arm_expiry(before_op="fetch", nth=2, mode="eof")  # 第 2 批前斷線
+    _no_sleep(monkeypatch)
+    progress: list[tuple[int, int]] = []
+    client = connected_client(monkeypatch, server, token_provider=lambda: "tok")
+    headers = client.list_headers("INBOX", on_progress=lambda d, t: progress.append((d, t)))
+    assert len(headers) == 120 and all(h.uid for h in headers)        # 完整、UID 全非空
+    assert len({h.uid for h in headers}) == 120                        # 無重複/遺漏
+    server.assert_all_fetches_request_uid()
+    assert server.command_count("UID FETCH") <= 4                      # ≤⌈120/50⌉+1：續抓、非整批重抓
+    assert server.command_count("AUTHENTICATE") >= 2                   # 發生重連
+    # 進度跨重連延續（不歸零、不倒退）
+    assert progress and progress[-1] == (120, 120)
+    assert all(b >= a for (a, _), (b, _) in zip(progress, progress[1:]))
+    assert min(d for d, _ in progress) >= 50                           # 第一批(50)後才回報、未歸零
+
+
+def test_list_headers_uidvalidity_change_on_reconnect_refetches(monkeypatch):
+    # feature 008 (FR-002)：重連後 UIDVALIDITY 變更（信箱重建）→ 捨棄過時進度、重新 SEARCH 安全重抓。
+    server = bulk_server(60)  # batch 50 → 2 批
+    server.arm_expiry(before_op="fetch", nth=2, mode="eof")
+    _no_sleep(monkeypatch)
+    client = connected_client(monkeypatch, server, token_provider=lambda: "tok")
+    orig_reconnect = client._reconnect
+    def reconnect_then_rebuild() -> None:
+        orig_reconnect()
+        server.set_uidvalidity("INBOX", 999999)  # 斷線期間信箱被重建 → UIDVALIDITY 變更
+    monkeypatch.setattr(client, "_reconnect", reconnect_then_rebuild)
+    headers = client.list_headers("INBOX")
+    assert len(headers) == 60 and all(h.uid for h in headers)   # 安全重抓後完整、UID 全非空
+    assert len({h.uid for h in headers}) == 60                   # 無重複
+    assert server.command_count("UID SEARCH") >= 2               # 變更後重新查現存 UID（未沿用過時進度）
+    assert server.command_count("AUTHENTICATE") >= 2
+
+
+def test_list_headers_parse_equivalent_decodes_master(monkeypatch):
+    # feature 008 (P7)：header-only 解析（BytesHeaderParser）輸出與優化前逐字一致——
+    # 涵蓋 CJK / emoji / encoded-word 顯示名 / 空主旨。
+    server = fresh_server()
+    client = connected_client(monkeypatch, server)
+    by_uid = {h.uid: h for h in client.list_headers("INBOX")}
+    assert by_uid["102"].subject == "週報 Q1 報告"                     # CJK
+    assert by_uid["103"].subject == "🎉 Happy New Year 新年快樂"       # emoji + CJK
+    assert by_uid["104"].subject == "FW: 推薦職務"                     # CJK
+    assert by_uid["101"].subject == "Weekly Newsletter"               # ASCII
+    assert by_uid["107"].subject == ""                                # 空主旨
+    assert by_uid["102"].sender == "王經理 <boss@x.com>"              # encoded-word 顯示名
+
+
+def test_list_headers_fetch_batch_size_controls_roundtrips(monkeypatch):
+    # feature 008 (P6)：fetch_batch_size 控制每批封數 → UID FETCH 往返=⌈N/M⌉。
+    server = bulk_server(25)
+    client = connected_client(monkeypatch, server, fetch_batch_size=10)
+    headers = client.list_headers("INBOX")
+    assert len(headers) == 25 and all(h.uid for h in headers)
+    assert server.command_count("UID FETCH") == 3  # ⌈25/10⌉
+
+
+def test_list_headers_reconnect_exhausted_raises(monkeypatch):
+    # feature 008：重連用盡仍失敗 → **如實外拋**（不靜默回傳不完整標頭）。
+    server = bulk_server(120)
+    server.arm_expiry(before_op="fetch", nth=2, mode="eof", persist=True)  # 第 2 批起每次都斷
+    _no_sleep(monkeypatch)
+    client = connected_client(
+        monkeypatch, server, token_provider=lambda: "tok", max_reconnect_attempts=2
+    )
+    with pytest.raises(imaplib.IMAP4.abort):
+        client.list_headers("INBOX")
+
+
+def test_list_headers_reconnect_status_is_secret_free(monkeypatch):
+    # feature 008 (FR-009/G2)：續傳路徑重連期間的狀態訊息不含 token/secret。
+    server = bulk_server(60)
+    server.arm_expiry(before_op="fetch", nth=2, mode="eof")
+    _no_sleep(monkeypatch)
+    statuses: list[str] = []
+    client = connected_client(
+        monkeypatch, server, token_provider=lambda: "super-secret-token", on_status=statuses.append
+    )
+    client.list_headers("INBOX")
+    assert any("重新連線" in s for s in statuses)                       # 恢復期間有狀態
+    assert all("super-secret-token" not in s for s in statuses)        # 狀態絕不含 token
 
 
 def test_move_loop_avoids_redundant_select(monkeypatch):
