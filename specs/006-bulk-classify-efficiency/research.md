@@ -17,7 +17,7 @@
 ## D3 — 單次查詢下的 determinate 進度（Clarify Q2）
 
 - **Decision**: `list_uids` 接受 `on_progress`，取得 UID 集合後以「該夾郵件數」為總數驅動 determinate 進度至完成（`done→total`），沿用既有 `progress.reporter` 的同款狀態條；**不注入任何人工延遲**。
-- **Rationale**: Clarify Q2 要保留逐項式 determinate 進度條、不退化為「無回饋」。`progress.reporter` 本身有 `0.1s` 重繪節流且最後一筆必繪（見 `progress.py`），故本就快的單次查詢會自然渲染為「狀態條出現並迅速填滿至 100%」。這保住 determinate bar 的 UX（FR-007、SC-007），同時對效能目標與 Principle VI 誠實——**不為了動畫而拖慢**。
+- **Rationale**: Clarify Q2 要保留逐項式 determinate 進度條、不退化為「無回饋」。`progress.reporter` 本身有 `0.1s` 重繪節流且最後一筆必繪（見 `progress.py`），故本就快的單次查詢會自然渲染為「狀態條出現並迅速填滿至 100%」。這保住 determinate bar 的 UX（FR-005、SC-006），同時對效能目標與 Principle VI 誠實——**不為了動畫而拖慢**。
 - **誠實標註（須向使用者揭示）**: 因查詢已是單次往返、本就極快，狀態條會「很快填滿」而非肉眼可見的逐格爬動；這是真實速度，非缺陷。若日後要肉眼動畫，僅能靠人工延遲（不採，違效率/誠實）。
 - **使用者確認（2026-06-28）**: 接受少次往返時狀態條快速衝至 100% 的現象、**不需人工延遲**；保留 `on_progress` 管線的用意在於**預留未來多次往返情境**（如 P5 重連續傳、超大信箱分批）時 progress 仍自然存在、不必再補管線。
 - **Alternatives rejected**: 人工 `sleep` 製造爬動（拖慢、不誠實）；完全不顯示/只印標籤（退化為無回饋，違 Q2）。
@@ -29,7 +29,7 @@
 - **正解**: P4 與 **P2（批次 UID MOVE）/ P3（`_ensure_selected` 免重選）** 同期設計，屆時分組真正帶來往返削減，並可一併重新定義早停語意（如改為「連線層級失敗」判定而非單純連續計數），整體更一致。
 - **承接**: spec「Out of Scope」已載明；效能報告狀態表 P4 維持「未實作（延至 P2/P3）」。Clarify Q3（分組後輸出順序）一併隨 P4 移出本期。
 
-## D5 — 與既有透明重連/有界重試相容（FR-011）
+## D5 — 與既有透明重連/有界重試相容（FR-009）
 
 - **Decision**: `list_uids` 比照 `list_headers`/`move`，以 `self._with_reconnect(lambda: self._list_uids_impl(...))` 包裝；`_list_uids_impl` 含 `select`，重連後重跑整個查詢（唯讀、冪等、可安全重抓）。
 - **Rationale**: 重用既有韌性機制（feature 005），零新增；唯讀查詢重抓無副作用。

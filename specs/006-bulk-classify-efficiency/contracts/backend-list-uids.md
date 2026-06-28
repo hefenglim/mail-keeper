@@ -16,7 +16,7 @@ def list_uids(
 - 「現存」涵蓋信箱中尚未 expunge 的所有郵件，**包含已標 `\Deleted` 未清除者**（等同 `UID SEARCH ALL`；Clarify Q1）。
 - **不得**下載或解析郵件完整標頭/內容——僅取 UID（P1）。
 - `on_progress(done, total)`：以該夾郵件數為 `total`、推進至 `done==total` 的 determinate 進度；無人工延遲（D3）。`None` 則不回報。
-- 唯讀、可重入：重複呼叫對信箱無副作用；與透明重連相容（中斷後重連重跑、結果不重複/不遺漏；FR-011）。
+- 唯讀、可重入：重複呼叫對信箱無副作用；與透明重連相容（中斷後重連重跑、結果不重複/不遺漏；FR-009）。
 - 空夾回傳空集合；元素為非空 UID 字串。
 
 ## IMAP 實作約束（`imap_client` 內，不外洩）
@@ -35,8 +35,8 @@ def list_uids(
 | `loop_report()["fetches_per_folder"]` | 該夾「整夾 header FETCH」= 0（存在性路徑） |
 | 回傳集合 | 含母版中已標 `\Deleted` 的 UID（驗 Q1 語意） |
 | `bytes_*` | 較 `list_headers` 同夾大幅下降（SC-003 佐證） |
-| `arm_expiry(before_op="search"/"fetch")` 後 | 重連後仍回正確集合、不重複/不遺漏（FR-011） |
+| `arm_expiry(before_op="search"/"fetch")` 後 | 重連後仍回正確集合、不重複/不遺漏（FR-009） |
 
 ## 既有方法不受影響
 
-`list_headers` / `list_inbox_headers`（功能1/2 需內容）維持原行為與回傳 `list[MailHeader]`（FR-008、SC-006）。
+`list_headers` / `list_inbox_headers`（功能1/2 需內容）維持原行為與回傳 `list[MailHeader]`（FR-006、SC-005）。

@@ -48,12 +48,12 @@ description: "Task list for 006-bulk-classify-efficiency (Phase 1: Lean Existenc
 
 ### Tests for User Story 1（先寫，必須先 FAIL）⚠️
 
-- [ ] T005 [P] [US1] 失敗測試（Red）`tests/test_classifier.py`：以 `FakeBackend` 驗 `build_report` 經 `_source_uids` 走 `list_uids`（非 `list_headers`，以呼叫紀錄/spy 斷言）；逐列判定（skip/candidate/infeasible＋原因）與現況一致，**含引用已標 `\Deleted` UID 的列為 candidate**（Clarify Q1）；同一來源夾在一次流程的存在性查詢只一次（FR-002，cache 重用）。
+- [ ] T005 [P] [US1] 失敗測試（Red）`tests/test_classifier.py`：以 `FakeBackend` 驗 `build_report` 經 `_source_uids` 走 `list_uids`（非 `list_headers`，以呼叫紀錄/spy 斷言）；逐列判定（skip/candidate/infeasible＋原因）與現況一致，**含引用已標 `\Deleted` UID 的列為 candidate**（Clarify Q1）；同一來源夾在一次流程的存在性查詢只一次（FR-002，cache 重用）；報告**列出順序＝輸入工作表列序**（FR-004）；`build_report` 透傳 `on_progress` 至 `list_uids`、得 determinate 進度（done→total）（FR-005／SC-006）。
 - [ ] T006 [P] [US1] 失敗測試（Red）`tests/test_imap_loop_regression.py`：`build_report` over `bulk_server(n)`（真 client over 引擎）→ `loop_report()["fetches_per_folder"]` 該來源夾整夾完整標頭 FETCH = **0**、`command_counts` 出現 `UID SEARCH`；報告階段 `bytes_*` 較「現況 `list_headers` 取 uid」同情景下降 **≥90%**（SC-001/SC-003）；`assert_all_fetches_request_uid()` 仍成立。
 
 ### Implementation for User Story 1
 
-- [ ] T007 [US1] 最小實作（Green）`src/mailkeeper/classifier.py`：`_source_uids` 改呼叫 `backend.list_uids(folder, on_progress=cb)`（取代 `{h.uid for h in backend.list_headers(...)}`）；進度標籤由「讀取『{folder}』標頭」改為存在性語意（如「檢查『{folder}』現存郵件」，M1）。`execute`／搬移路徑**不動**。使 T005/T006 轉綠。（依賴 T003、T004）
+- [ ] T007 [US1] 最小實作（Green）`src/mailkeeper/classifier.py`：`_source_uids` 改呼叫 `backend.list_uids(folder, on_progress=cb)`（取代 `{h.uid for h in backend.list_headers(...)}`）；進度標籤由「讀取『{folder}』標頭」改為存在性語意（如「檢查『{folder}』現存郵件」）。`execute`／搬移路徑**不動**。使 T005/T006 轉綠。（依賴 T003、T004）
 - [ ] T008 [US1] 測試遷移 `tests/test_classifier.py`（及其他相關）：把既有假設 `_source_uids`→`list_headers` 的測試改判 `list_uids`，全套回綠；確認無殘留對「整夾標頭抓取」的舊期待。
 
 **Checkpoint**: US1 完成——大型信箱檢查報告不再整夾抓標頭、判定等價、可獨立驗證。
