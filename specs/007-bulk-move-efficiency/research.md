@@ -17,7 +17,7 @@
 
 ## D3 — 批次大小：固定上限分塊（Clarify）
 
-- **Decision**: 以「整個 (來源,目標) 群為一批」，超過固定常數上限（`config.MOVE_BATCH_MAX`，預設如 200）則分塊為多批。**程式內固定、不開放設定**（可調批量屬延後的 P6）。
+- **Decision**: 以「整個 (來源,目標) 群為一批」，超過固定常數上限（`config.MOVE_BATCH_MAX`，預設 200）則分塊為多批。**程式內固定、不開放設定**（可調批量屬延後的 P6）。
 - **Rationale**: 限制命令列長度與「批次失敗退逐封」的爆炸半徑；200 為保守安全值。
 - **Alternatives rejected**: 不設上限（超大群命令列過長、退逐封範圍大）；開放 config（與 P6 重疊、超範圍）。
 
@@ -39,7 +39,7 @@
 
 - **Decision**: `classifier.execute` 不再以「連續資料失敗計數」提前停止。單列資料失敗（`move_many` 回傳 dict 中該 uid 有錯）記為失敗 `MoveResult`、繼續處理其餘。**連線層級失敗**（`_with_reconnect` 重連用盡後拋出的 session-lost）往外傳 → execute 停止並回傳已處理結果；`ReauthRequired` 仍往外傳由 cli 乾淨停止。
 - **Rationale**: 分組／批次改變列序 → 連續計數失去意義且會改變被處理集合（006 F1）。連線層級判定與順序無關、更正確（真死連線仍由重連用盡偵測而停）。
-- **影響/遷移**: 移除 `execute` 的 `consecutive_failures`/`max_consecutive_failures` 早停邏輯；既有 `test_execute_aborts_after_consecutive_failures`/`test_execute_threshold_configurable` 需遷移（資料失敗不再早停；連線層級失敗以重連用盡 → 拋出 → 停）。cli 的「剩餘 N 筆」回報配合（連線層級停止時回報已完成/未完成）。`config.MAX_CONSECUTIVE_FAILURES` 對 classify 不再驅動早停（保留常數以免破壞既有 import；標註不再用於資料失敗）。
+- **影響/遷移**: 移除 `execute` 的 `consecutive_failures`/`max_consecutive_failures` 早停邏輯；既有 `test_execute_aborts_after_consecutive_failures`/`test_execute_threshold_configurable` 需遷移（資料失敗不再早停；連線層級失敗以重連用盡 → 拋出 → 停）。cli 的「剩餘 N 筆」回報配合（連線層級停止時回報已完成/未完成）。`config.MAX_CONSECUTIVE_FAILURES` 對 classify 不再驅動早停（保留常數以免破壞既有 import；標註不再用於資料失敗）。**U1 決議**：`execute(max_consecutive_failures=...)` 參數、cli 呼叫點、`config_store` 對應欄位**保留為 inert/deprecated**（不再驅動早停；保留以維持向後相容與既有設定/測試不破壞），docstring 標 deprecated，並補測試「不論其值為何，單列資料失敗都不早停」。需一併遷移 `tests/test_cli_csv_flow.py` 的早停文案測試（C2）。
 
 ## D6 — 候選分組 + 輸出還原 CSV 列序 + 批次進度
 

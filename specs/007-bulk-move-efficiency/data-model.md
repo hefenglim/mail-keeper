@@ -28,8 +28,8 @@
 - **生命週期**: `connect()`/`_reconnect()` 重置為 `None`（連線換了、選取失效）。
 
 ### Move Idempotency State（後備搬移冪等判定）
-- **輸入**: 來源夾中該 uid 的存在與 `\Deleted` 旗標（重試前查）。
-- **判定**: 不在→已完成（成功）；在且 `\Deleted`→已 copy（跳 COPY、只 expunge）；在且未標→正常 copy（FR-006、SC-005）。
+- **輸入**: 來源該 uid 是否仍在；若仍在，取其 `Message-ID` 並在**目標夾**以 `HEADER Message-ID` 查既有複本。
+- **判定**: 來源 uid 不在→已完整搬走（成功 no-op，快路徑）；在且目標已有此 `Message-ID`→前次已 COPY（跳 COPY、補標刪 + UID EXPUNGE）；在且目標無→COPY→標刪→UID EXPUNGE；無 `Message-ID`→盡力 COPY（已知殘留）。（FR-006、SC-005；僅看來源 `\Deleted` 不足以涵蓋「複製後、標刪前」窗口。）
 
 ## 狀態流（execute 一次搬移）
 

@@ -28,7 +28,7 @@ description: "Task list for 007-bulk-move-efficiency (P4 grouping + P3 no-redund
 
 **Purpose**: US1/US2 共用的搬移路徑基礎（選取追蹤 + 批次上限常數）。先寫失敗測試。
 
-- [ ] T002 [P] `src/mailkeeper/config.py` 新增 `MOVE_BATCH_MAX` 常數（程式內固定預設，如 200；不開放 config，P6 延後）。
+- [ ] T002 [P] `src/mailkeeper/config.py` 新增 `MOVE_BATCH_MAX` 常數（程式內固定預設 **200**；不開放 config，P6 延後）。
 - [ ] T003 失敗測試（Red）`tests/test_imap_loop_regression.py`：以真 client over 引擎，對同一夾連續多次 `move`/`mark_read` → `server.redundant_selects() == 0`、該夾 `SELECT` 計數 = 1；重連後（`arm_expiry`）會重新 SELECT（選取狀態已重置）。
 - [ ] T004 最小實作（Green）`src/mailkeeper/imap_client.py`：加 `self._selected` 狀態 + `_ensure_selected(mailbox, readonly=False)`（僅未選/夾不同/模式不同才 `select`）；`connect()`/`_reconnect()` 重置 `self._selected=None`；`_move_impl`/`mark_read`/`flag` 改走 `_ensure_selected`。使 T003 轉綠。
 
@@ -54,7 +54,7 @@ description: "Task list for 007-bulk-move-efficiency (P4 grouping + P3 no-redund
 - [ ] T009 [US1] `src/mailkeeper/organizer.py`：`MailBackend` 協定新增 `move_many(uids, dest_folder, mailbox="INBOX") -> dict[str, str | None]`（向後相容）；`tests/conftest.py` `FakeBackend.move_many`（in-memory，含部分失敗）。使 T007 轉綠。
 - [ ] T010 [US1] `src/mailkeeper/imap_client.py`：`move_many` + `_move_many_impl`（`_ensure_selected` → `UID MOVE <set>` 分塊 `MOVE_BATCH_MAX`；批次非 OK/不支援 → 該塊退回逐封 `move` 歸因），`_with_reconnect` 包裝。使 T005/T006 轉綠。
 - [ ] T011 [US1] `src/mailkeeper/classifier.py`：`execute` 依 (current,target) 穩定分組（保留原索引）、逐群分塊 `move_many`、結果映回並依 CSV 列序回傳；進度每批推進；**早停改連線層級**（移除連續資料失敗計數；單列失敗只記不早停、連線層級失敗往外傳）。使 T008 轉綠。
-- [ ] T012 [US1] 遷移既有早停測試 `tests/test_classifier.py`：`test_execute_aborts_after_consecutive_failures` / `test_execute_threshold_configurable` 改為連線層級語意（單列資料失敗不早停；連線中斷且重連用盡 → 停），或以新語意重寫；全套回綠。
+- [ ] T012 [US1] 遷移既有早停測試（連線層級語意：單列資料失敗不早停；連線中斷且重連用盡 → 停）：`tests/test_classifier.py::{test_execute_aborts_after_consecutive_failures, test_execute_threshold_configurable}` 與 **`tests/test_cli_csv_flow.py::test_classify_warns_when_execution_stops_early`**（剩餘/連線中斷文案，C2）；核對 `tests/test_resilience.py` 設定流程斷言仍有效。**U1**：`execute` 的 `max_consecutive_failures` 參數／cli 呼叫點／`config_store` 欄位保留為 **inert/deprecated**（docstring 標註、不再驅動早停），補測試「不論其值資料失敗都不早停」。全套回綠。
 
 **Checkpoint**: US1 完成——同夾搬移免重選 + 批次、分組決定性、結果 CSV 序等價、進度不退化。
 
