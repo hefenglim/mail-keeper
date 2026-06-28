@@ -42,6 +42,19 @@ def test_engine_fetch_multiple_messages_parsed_by_real_imaplib():
     assert b"UID 11" in tuples[1][0] and b"Subject: B" in tuples[1][1]
 
 
+def test_engine_header_message_id_fetch_and_search():
+    # feature 007 引擎前置（§7 保真）：母版郵件帶 Message-ID → 可經 FETCH 取得、可用 HEADER 搜尋命中
+    # （後備搬移冪等需「以目標夾 Message-ID 偵測既有複本」）。真 imaplib over 引擎驗證。
+    server = ImapServer({"INBOX": [message(10, "A"), message(11, "B")]})
+    m = _imap_over(server)
+    m.select("INBOX", readonly=True)
+    typ, data = m.uid("fetch", "10", "(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
+    assert typ == "OK"
+    assert b"Message-ID: <msg-10@mailkeeper.test>" in data[0][1]
+    typ, sdata = m.uid("search", None, "HEADER", "Message-ID", "<msg-10@mailkeeper.test>")
+    assert typ == "OK" and sdata[0].split() == [b"10"]            # HEADER 搜尋只命中 10
+
+
 def test_engine_fetch_omits_uid_when_not_requested():
     # 忠實鐵則（0.5.0 致命 bug 的觸發條件）：沒索取 UID → 伺服器就不回 UID（與真實 Outlook 一致）
     server = ImapServer({"INBOX": [message(10, "A")]})

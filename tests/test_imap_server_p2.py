@@ -90,20 +90,54 @@ def test_move_fallback_copy_fails_keeps_source(monkeypatch):
     assert client._imap.untagged_responses.get("TRYCREATE") is not None
 
 
-@pytest.mark.xfail(
-    reason="已知產品限制（SR C1）：fallback move 於 COPY 成功後、UID EXPUNGE 前斷線，重試會重做 "
-    "COPY → 目標夾出現重複複本（非資料遺失，來源仍正確移除）。正解需重試前偵測既有複本或改用更原子序列；"
-    "見 roadmap-backlog。本測試以期望（修好後）行為 xfail 記錄此限制，P3 遷移 fallback 路徑前應先修。",
-    strict=False,
-)
-def test_fallback_move_idempotency_across_copy_known_limitation(monkeypatch):
+def test_fallback_move_idempotent_across_copy_expunge_window(monkeypatch):
+    # feature 007 (C1)：fallback 於「COPY 成功、UID EXPUNGE 前」斷線重試 → 以目標 Message-ID 去重，恰一封
     server = _server(supports_move=False)
-    server.arm_expiry(before_op="EXPUNGE", nth=1, mode="eof")  # COPY 成功、UID EXPUNGE 前斷線
+    server.arm_expiry(before_op="EXPUNGE", nth=1, mode="eof")  # COPY+store 完成、UID EXPUNGE 前斷線
     _no_sleep(monkeypatch)
     client = connected_client(monkeypatch, server, token_provider=lambda: "tok")
     client.move(str(INBOX_NEWSLETTER_UID), "Archive", "INBOX")
-    assert INBOX_NEWSLETTER_UID not in {m.uid for m in server.mailboxes["INBOX"]}  # 來源確實移除（非遺失）
-    assert len(server.mailboxes["Archive"]) == 1  # 期望恰一封；現況為 2（重試重複 COPY）→ 暫 xfail
+    assert INBOX_NEWSLETTER_UID not in {m.uid for m in server.mailboxes["INBOX"]}  # 來源確實移除
+    assert len(server.mailboxes["Archive"]) == 1  # 不重複複本（C1 修復）
+
+
+def test_fallback_move_idempotent_across_copy_store_window(monkeypatch):
+    # feature 007 (C1，更難子窗口)：「COPY 成功、標刪(store) 前」斷線——僅靠來源 \Deleted 旗標無法偵測，
+    # 必以目標夾 Message-ID 去重才不重複。重試後目標恰一封。
+    server = _server(supports_move=False)
+    server.arm_expiry(before_op="STORE", nth=1, mode="eof")  # COPY 完成、標刪前斷線
+    _no_sleep(monkeypatch)
+    client = connected_client(monkeypatch, server, token_provider=lambda: "tok")
+    client.move(str(INBOX_NEWSLETTER_UID), "Archive", "INBOX")
+    assert INBOX_NEWSLETTER_UID not in {m.uid for m in server.mailboxes["INBOX"]}
+    assert len(server.mailboxes["Archive"]) == 1  # Message-ID 去重覆蓋此窗口
+
+
+def test_move_reconnect_mid_move_no_dup_no_loss(monkeypatch):
+    # feature 007 (US2)：主路徑批次 UID MOVE 搬移中途斷線 → 透明重連續完、0 重複/0 遺漏、不波及他人 \Deleted
+    server = _server()  # supports_move=True
+    server.arm_expiry(before_op="move", nth=1, mode="eof")
+    _no_sleep(monkeypatch)
+    client = connected_client(monkeypatch, server, token_provider=lambda: "tok")
+    client.move_many([str(INBOX_NEWSLETTER_UID), str(INBOX_CJK_UID)], "Archive", "INBOX")
+    inbox = {u for u, _ in server.snapshot()["INBOX"]}
+    assert INBOX_NEWSLETTER_UID not in inbox and INBOX_CJK_UID not in inbox
+    assert len(server.mailboxes["Archive"]) == 2  # 兩封各一份、無重複
+    assert server.loop_report()["authentications"] >= 2  # 發生重連
+    assert INBOX_USER_DELETED_UID in inbox  # 他人 \Deleted 不被波及
+
+
+def test_move_many_fallback_per_uid_spares_foreign_deleted(monkeypatch):
+    # feature 007 US3：批次（無 UID MOVE）退逐封 copy 路徑——多封皆搬、他人 \Deleted(106) 不被波及、結果皆成功
+    server = _server(supports_move=False)
+    client = connected_client(monkeypatch, server)
+    out = client.move_many([str(INBOX_NEWSLETTER_UID), str(INBOX_CJK_UID)], "Archive", "INBOX")
+    assert out == {str(INBOX_NEWSLETTER_UID): None, str(INBOX_CJK_UID): None}
+    assert server.command_count("UID COPY") == 2 and server.command_count("EXPUNGE") == 0
+    inbox = {u for u, _ in server.snapshot()["INBOX"]}
+    assert INBOX_NEWSLETTER_UID not in inbox and INBOX_CJK_UID not in inbox
+    assert INBOX_USER_DELETED_UID in inbox           # 他人 \Deleted 不被波及
+    assert len(server.mailboxes["Archive"]) == 2
 
 
 def test_ensure_folder_creates_then_idempotent(monkeypatch):

@@ -404,18 +404,55 @@ class OutlookIMAPClient:
         if typ == "OK":
             return
 
-        # 後備方案（伺服器不支援 MOVE）：copy + 標刪 + UID EXPUNGE
-        typ, _ = self._conn.uid("copy", uid, dest_folder)
-        if typ != "OK":
-            raise BackendError(
-                f"搬移失敗：COPY 未成功（{typ}），已中止且未刪除來源郵件"
-                f"（uid={uid} → {dest_folder}）。請確認目標資料夾後重試。"
-            )
+        # 後備方案（伺服器不支援 MOVE）：**冪等** copy → 標刪 → UID EXPUNGE（C1）。
+        # 重試前先判前次進度，避免「COPY 後斷線重試 → 重複複本」：
+        if not self._uid_present(uid):
+            return  # 來源已無此 uid → 前次已完整搬走（no-op，重試安全）
+        if not self._dest_has_copy(uid, dest_folder, mailbox):
+            typ, _ = self._conn.uid("copy", uid, dest_folder)
+            if typ != "OK":
+                raise BackendError(
+                    f"搬移失敗：COPY 未成功（{typ}），已中止且未刪除來源郵件"
+                    f"（uid={uid} → {dest_folder}）。請確認目標資料夾後重試。"
+                )
         self._conn.uid("store", uid, "+FLAGS", "(\\Deleted)")
         typ, _ = self._conn.uid("expunge", uid)  # UID EXPUNGE：只清這封
         if typ != "OK":
             # 伺服器無 UIDPLUS：別無選擇只能整夾 EXPUNGE（此後備路徑仍可能波及其他已標刪郵件）。
             self._conn.expunge()
+
+    def _uid_present(self, uid: str) -> bool:
+        """來源（目前選取夾）是否仍有此 UID（後備搬移冪等的快路徑判定）。"""
+        typ, data = self._conn.uid("search", None, "UID", uid)  # type: ignore[arg-type]
+        return typ == "OK" and bool(data) and bool(data[0]) and uid.encode() in data[0].split()
+
+    def _message_id(self, uid: str) -> str | None:
+        """取來源該 UID 的 Message-ID（無則 None）。"""
+        typ, data = self._conn.uid("fetch", uid, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
+        if typ != "OK" or not data:
+            return None
+        for part in data:
+            if isinstance(part, tuple) and len(part) >= 2 and part[1]:
+                mid = email.message_from_bytes(part[1]).get("Message-ID")
+                if mid:
+                    return mid.strip()
+        return None
+
+    def _dest_has_copy(self, uid: str, dest_folder: str, mailbox: str) -> bool:
+        """後備搬移冪等（C1）：以 `Message-ID` 偵測目標夾是否已有此封（前次 COPY 殘留），避免重複複本。
+        無 `Message-ID` → 回 False（盡力 COPY，已知殘留）。查畢切回來源夾（讀寫）續做標刪/expunge。"""
+        mid = self._message_id(uid)
+        if not mid:
+            return False
+        typ, _ = self._conn.select(dest_folder, readonly=True)
+        self._selected = (dest_folder, True) if typ == "OK" else None
+        try:
+            if typ != "OK":
+                return False  # 目標夾無法選取（如不存在）→ 視為無複本，交由後續 COPY（會得 TRYCREATE）
+            typ, data = self._conn.uid("search", None, "HEADER", "Message-ID", mid)  # type: ignore[arg-type]
+            return typ == "OK" and bool(data) and bool(data[0]) and bool(data[0].split())
+        finally:
+            self._ensure_selected(mailbox)  # 切回來源（讀寫）續做 COPY/標刪/expunge
 
     def move_many(
         self, uids: list[str], dest_folder: str, mailbox: str = "INBOX"

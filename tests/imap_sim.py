@@ -50,7 +50,10 @@ def message(
     """建構一封模擬郵件的便捷函式（header-only：只帶 HEADER.FIELDS 可取的表頭）。"""
     return SimMessage(
         uid,
-        {"SUBJECT": subject, "FROM": sender, "TO": to, "DATE": date},
+        {
+            "SUBJECT": subject, "FROM": sender, "TO": to, "DATE": date,
+            "MESSAGE-ID": f"<msg-{uid}@mailkeeper.test>",  # 穩定唯一識別（後備搬移冪等以此去重）
+        },
         set(flags or set()),
     )
 
@@ -76,6 +79,8 @@ def mime_message(
     ``fields`` 與表頭同源 → HEADER.FIELDS 路徑與整封內文一致。
     """
     msg = EmailMessage()
+    mid = f"<msg-{uid}@mailkeeper.test>"
+    msg["Message-ID"] = mid  # 穩定唯一識別（後備搬移冪等以此去重）
     if subject:
         msg["Subject"] = subject
     if sender:
@@ -100,7 +105,7 @@ def mime_message(
     raw = msg.as_bytes(policy=email.policy.SMTP)  # CRLF 行尾、標準折行/編碼——真實 wire bytes
     return SimMessage(
         uid,
-        {"SUBJECT": subject, "FROM": sender, "TO": to, "DATE": date},
+        {"SUBJECT": subject, "FROM": sender, "TO": to, "DATE": date, "MESSAGE-ID": mid},
         set(flags or set()),
         raw,
     )
@@ -155,7 +160,9 @@ def _parse_uidset(spec: Any) -> list[int]:
     return out
 
 
-_HEADER_TITLE = {"SUBJECT": "Subject", "FROM": "From", "TO": "To", "DATE": "Date"}
+_HEADER_TITLE = {
+    "SUBJECT": "Subject", "FROM": "From", "TO": "To", "DATE": "Date", "MESSAGE-ID": "Message-ID",
+}
 
 
 def _encode_word(tok: str) -> str:

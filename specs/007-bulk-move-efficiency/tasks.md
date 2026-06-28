@@ -68,13 +68,13 @@ description: "Task list for 007-bulk-move-efficiency (P4 grouping + P3 no-redund
 
 ### Tests / 引擎前置（先寫，必須先 FAIL）⚠️
 
-- [ ] T013 [P] [US2] 引擎擴充（§7：先加保真案例）`tests/imap_server.py` + `tests/imaplib_probe.py`：母版郵件帶 `Message-ID`；`_search_match` 支援 `HEADER Message-ID <id>`；於 `tests/test_imap_server.py`/`test_imap_server_behaviors.py` 加對拍真 imaplib 的保真測試。
-- [ ] T014 [P] [US2] 失敗測試（Red）`tests/test_imap_server_p2.py`：伺服器不支援 `UID MOVE`（走後備），`arm_expiry` 於「COPY 後、標刪/EXPUNGE 前」注入中斷 + `token_provider` → 透明重連重試 → `snapshot()` 目標該封複本數 **==1**、來源正確移除、他人 `\Deleted` 不被波及。**同時移除 feature 006 的 C1 xfail marker**（`test_fallback_move_idempotency_across_copy_known_limitation` → 應 xpass/pass）。
-- [ ] T015 [P] [US2] 失敗測試（Red）`tests/test_imap_server_p2.py`：`arm_expiry(before_op="move", nth=k, mode="eof")` 搬移中途中斷 → 重連後全部完成、0 重複 / 0 遺漏、`loop_report()["authentications"]>=2`。
+- [x] T013 [P] [US2] 引擎擴充（§7：先加保真案例）`tests/imap_server.py` + `tests/imaplib_probe.py`：母版郵件帶 `Message-ID`；`_search_match` 支援 `HEADER Message-ID <id>`；於 `tests/test_imap_server.py`/`test_imap_server_behaviors.py` 加對拍真 imaplib 的保真測試。
+- [x] T014 [P] [US2] 失敗測試（Red）`tests/test_imap_server_p2.py`：伺服器不支援 `UID MOVE`（走後備），`arm_expiry` 於「COPY 後、標刪/EXPUNGE 前」注入中斷 + `token_provider` → 透明重連重試 → `snapshot()` 目標該封複本數 **==1**、來源正確移除、他人 `\Deleted` 不被波及。**同時移除 feature 006 的 C1 xfail marker**（`test_fallback_move_idempotency_across_copy_known_limitation` → 應 xpass/pass）。
+- [x] T015 [P] [US2] 失敗測試（Red）`tests/test_imap_server_p2.py`：`arm_expiry(before_op="move", nth=k, mode="eof")` 搬移中途中斷 → 重連後全部完成、0 重複 / 0 遺漏、`loop_report()["authentications"]>=2`。
 
 ### Implementation for User Story 2
 
-- [ ] T016 [US2] `src/mailkeeper/imap_client.py`：`_move_impl` 後備路徑改冪等——uid 不在來源→成功 no-op；uid 在→取 `Message-ID`、在目標夾 `UID SEARCH HEADER Message-ID` 偵測既有複本：有則跳 COPY 只補標刪+`UID EXPUNGE`，無則 COPY→標刪→`UID EXPUNGE`；無 Message-ID → 盡力 COPY（docstring 標註殘留）。使 T014/T015 轉綠。
+- [x] T016 [US2] `src/mailkeeper/imap_client.py`：`_move_impl` 後備路徑改冪等——uid 不在來源→成功 no-op；uid 在→取 `Message-ID`、在目標夾 `UID SEARCH HEADER Message-ID` 偵測既有複本：有則跳 COPY 只補標刪+`UID EXPUNGE`，無則 COPY→標刪→`UID EXPUNGE`；無 Message-ID → 盡力 COPY（docstring 標註殘留）。使 T014/T015 轉綠。
 
 **Checkpoint**: US2 完成——後備搬移冪等、重連續完無重複；C1 修復、xfail 移除。
 
@@ -84,8 +84,8 @@ description: "Task list for 007-bulk-move-efficiency (P4 grouping + P3 no-redund
 
 **Goal**: 確認只改「如何送命令」，結果/輸出/安全全等價。
 
-- [ ] T017 [P] [US3] 回歸與安全測試 `tests/test_imap_loop_regression.py` / `tests/test_classifier.py`：(1) 同工作表搬移結果集合、逐列成敗與順序（CSV 序）與優化前等價；(2) `snapshot()` 他人 `\Deleted` 全程不被波及（SC-007）；(3) 單列資料失敗不早停、其餘仍處理 vs 連線中斷且重連用盡才停（SC-010，分別注入驗證）；(4) 未加執行旗標維持 dry-run、輸出無 token。
-- [ ] T018 [US3] 遷移其他受影響測試 `tests/test_imap_dataset.py`（效率斷言配合批次/免重選）；確認 `test_full_simulation_regression_loop` 等 UID MOVE 計數/選取斷言更新為批次語意。
+- [x] T017 [P] [US3] 回歸與安全測試 `tests/test_imap_loop_regression.py` / `tests/test_classifier.py`：(1) 同工作表搬移結果集合、逐列成敗與順序（CSV 序）與優化前等價；(2) `snapshot()` 他人 `\Deleted` 全程不被波及（SC-007）；(3) 單列資料失敗不早停、其餘仍處理 vs 連線中斷且重連用盡才停（SC-010，分別注入驗證）；(4) 未加執行旗標維持 dry-run、輸出無 token。
+- [x] T018 [US3] 遷移其他受影響測試 `tests/test_imap_dataset.py`（效率斷言配合批次/免重選）；確認 `test_full_simulation_regression_loop` 等 UID MOVE 計數/選取斷言更新為批次語意。
 
 **Checkpoint**: US1+US2+US3 全綠、離線。
 
@@ -93,10 +93,10 @@ description: "Task list for 007-bulk-move-efficiency (P4 grouping + P3 no-redund
 
 ## Phase 6: Polish & Cross-Cutting
 
-- [ ] T019 [P] `python -m mypy src/mailkeeper` 乾淨；覆蓋率 `imap_client.py` ≥88%、總 ≥85%（`_ensure_selected`/`move_many`/後備冪等須被引擎測試覆蓋）。
-- [ ] T020 執行 `quickstart.md` V1–V8，逐項對照 SC-001..SC-010 通過。
-- [ ] T021 升版（Principle VI）：`pyproject.toml` + `src/mailkeeper/__init__.py` `0.6.1 → 0.6.2`（兩處一致）；`CHANGELOG.md` 加 `## [0.6.2] - <真實交付日期>`（P4 分組 + P3 免重選 + P2 批次 MOVE + C1 後備冪等；效能：500 同夾 SELECT N→1、MOVE N→⌈N/批⌉）。
-- [ ] T022 [P] 文件同步：回填 `doc/mailkeeper-performance-report-20260627.html` 狀態表 **P2/P3/P4 → ✅ v0.6.2**、backlog **C1/C2 標示已修**（更新卡片、最後更新、修訂紀錄）；同步 `memory/roadmap-backlog.md`、`memory/perf-optimization-report.md`。
+- [x] T019 [P] `python -m mypy src/mailkeeper` 乾淨；覆蓋率 `imap_client.py` ≥88%、總 ≥85%（`_ensure_selected`/`move_many`/後備冪等須被引擎測試覆蓋）。
+- [x] T020 執行 `quickstart.md` V1–V8，逐項對照 SC-001..SC-010 通過。
+- [x] T021 升版（Principle VI）：`pyproject.toml` + `src/mailkeeper/__init__.py` `0.6.1 → 0.6.2`（兩處一致）；`CHANGELOG.md` 加 `## [0.6.2] - <真實交付日期>`（P4 分組 + P3 免重選 + P2 批次 MOVE + C1 後備冪等；效能：500 同夾 SELECT N→1、MOVE N→⌈N/批⌉）。
+- [x] T022 [P] 文件同步：回填 `doc/mailkeeper-performance-report-20260627.html` 狀態表 **P2/P3/P4 → ✅ v0.6.2**、backlog **C1/C2 標示已修**（更新卡片、最後更新、修訂紀錄）；同步 `memory/roadmap-backlog.md`、`memory/perf-optimization-report.md`。
 
 ---
 
