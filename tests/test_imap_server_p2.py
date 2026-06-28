@@ -226,13 +226,16 @@ def test_reconnect_exhausted_raises_and_preserves_source(monkeypatch):
     assert INBOX_NEWSLETTER_UID in {u for u, _ in server.snapshot()["INBOX"]}  # 乾淨停止、未搬走
 
 
-def test_list_headers_eof_mid_fetch_refetches_whole(monkeypatch):
+def test_list_headers_reconnect_mid_fetch_completes(monkeypatch):
+    # feature 008 (P5)：標頭下載中途連線失效 → 透明重連後續抓完成、結果完整。
+    # 單批情形（8 封/批 50）續傳退化為重取該批；「已取得批次不重抓」的多批續傳見
+    # test_imap_loop_regression::test_list_headers_resumable_skips_fetched_batches。
     server = _server()
-    server.arm_expiry(before_op="fetch", nth=1, mode="eof")  # 標頭下載中途失效 → 整批重抓
+    server.arm_expiry(before_op="fetch", nth=1, mode="eof")
     _no_sleep(monkeypatch)
     client = connected_client(monkeypatch, server, token_provider=lambda: "tok")
     headers = client.list_headers("INBOX")
-    assert len(headers) == 8 and all(h.uid for h in headers)  # 重抓後完整、UID 全非空
+    assert len(headers) == 8 and all(h.uid for h in headers)  # 續抓後完整、UID 全非空
     assert server.command_count("AUTHENTICATE") >= 2
 
 

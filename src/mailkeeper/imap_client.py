@@ -18,6 +18,7 @@ import ssl
 import time
 from dataclasses import dataclass
 from email.header import decode_header
+from email.parser import BytesHeaderParser
 from typing import Any, Callable, Iterator, TypeVar
 
 import charset_normalizer
@@ -36,7 +37,7 @@ class ReauthRequired(Exception):
     """
 
 
-_FETCH_BATCH = 50  # 每批 UID FETCH 的封數：減少往返、並讓進度於下載期間分批前進
+_HEADER_PARSER = BytesHeaderParser()  # P7：header-only 解析（只解析表頭、不建構 body 結構；輸出等價 message_from_bytes）
 _UID_RE = re.compile(rb"UID (\d+)")
 
 # 視為「session 失效/連線中斷、需重連」的錯誤訊息標記（research R4；對照真實 Outlook log）。
@@ -164,6 +165,7 @@ class OutlookIMAPClient:
         max_retries_per_op: int = config.MAX_RETRIES_PER_OP,
         backoff_base_seconds: float = config.BACKOFF_BASE_SECONDS,
         backoff_cap_seconds: float = config.BACKOFF_CAP_SECONDS,
+        fetch_batch_size: int = config.FETCH_BATCH_DEFAULT,
     ) -> None:
         self._email = email_account
         self._token = access_token
@@ -181,6 +183,7 @@ class OutlookIMAPClient:
         self._max_retries_per_op = max(0, max_retries_per_op)
         self._backoff_base = max(0.0, backoff_base_seconds)
         self._backoff_cap = max(self._backoff_base, backoff_cap_seconds)
+        self._fetch_batch = max(1, fetch_batch_size)  # 每批 UID FETCH 封數（P6：可由 config 注入，下限 1）
 
     # ---------- 連線管理 ----------
     def connect(self) -> None:
@@ -293,60 +296,82 @@ class OutlookIMAPClient:
     def list_headers(
         self, folder: str = "INBOX", *, on_progress: Callable[[int, int], None] | None = None
     ) -> list[MailHeader]:
-        """讀取指定資料夾所有郵件的標題 (只抓 header)。以分批 UID FETCH 取得，每批回報
-        進度 `on_progress(done, total)`。連線中斷會透明重連並**整批重抓**（唯讀、重跑安全）。"""
-        return self._with_reconnect(lambda: self._list_headers_impl(folder, on_progress=on_progress))
+        """讀取指定資料夾所有郵件的標題（只抓 header），分批 UID FETCH、每批回報進度
+        `on_progress(done, total)`。**連線中斷會透明重連並從中斷處續抓**（P5）：已取得的批次不重抓、
+        同一 UIDVALIDITY 下進度延續；資料夾 UIDVALIDITY 變更（信箱重建）則安全地整批重抓。唯讀、重跑安全。
 
-    def _list_headers_impl(
-        self, folder: str = "INBOX", *, on_progress: Callable[[int, int], None] | None = None
-    ) -> list[MailHeader]:
-        self._ensure_selected(folder, readonly=True)
-        typ, data = self._conn.uid("search", None, "ALL")  # type: ignore[arg-type]  # IMAP SEARCH 允許 charset=None
-        if typ != "OK" or not data or data[0] is None:
-            return []
-
-        uids = data[0].split()
-        total = len(uids)
-        headers: list[MailHeader] = []
-        done = 0
-        for batch in _chunked(uids, _FETCH_BATCH):
-            typ, msg_data = self._conn.uid(
-                "fetch",
-                ",".join(u.decode() for u in batch),
-                # 必須顯式索取 UID（置於 BODY 之前）：批次 FETCH 無法像逐封那樣沿用
-                # SEARCH 的 UID，只能從回應 metadata 解析；未索取時 Outlook 不回 UID，
-                # 會導致每列 uid 全空、產出無法用於分類的工作表（0.5.0 致命回歸）。
-                "(UID BODY.PEEK[HEADER.FIELDS (SUBJECT FROM TO DATE)])",
-            )
-            if typ != "OK":
-                # 批次失敗不可靜默吞（會回傳不完整標頭、誤導後續分類）：大聲報錯。
-                raise BackendError(f"讀取標頭失敗（{typ}）：{folder} 的批次 FETCH 未成功，請重試。")
-            if msg_data:
-                for part in msg_data:
-                    if not isinstance(part, tuple) or len(part) < 2 or part[1] is None:
-                        continue
-                    uid = _extract_uid(part[0])
-                    if not uid:
-                        # 解析不到 UID 即協定異常：寧可大聲中止，也不靜默吐出 uid 空白、
-                        # 後續完全無法搬移的「無效工作表」（避免重演靜默資料汙染）。
-                        raise BackendError(
-                            f"讀取標頭失敗：無法從回應解析 UID（{folder}）。已中止以免"
-                            "產生缺 UID 的無效工作表；請重試，若持續發生請回報。"
-                        )
-                    msg = email.message_from_bytes(part[1])
-                    headers.append(
-                        MailHeader(
+        以自帶的可續傳韌性迴圈取代外層 `_with_reconnect`：重連後重新 `SEARCH ALL` 取現存 UID，
+        與「已取得 UID 集合」取差集、只抓差集；有界（`max_reconnect_attempts`），成功一批即重置失敗
+        計數（多次中斷皆可續）；重連用盡或非連線類錯誤 → 如實外拋（不靜默回傳不完整標頭）。"""
+        collected: dict[str, MailHeader] = {}     # uid → header；跨重連保留（續傳的關鍵狀態）
+        uidvalidity: str | None = None
+        failures = 0
+        while True:
+            try:
+                self._ensure_selected(folder, readonly=True)
+                cur_validity = self._current_uidvalidity()
+                if uidvalidity is not None and cur_validity != uidvalidity:
+                    collected.clear()  # UIDVALIDITY 變更（信箱重建）→ 過時進度作廢、整批重抓
+                uidvalidity = cur_validity
+                typ, data = self._conn.uid("search", None, "ALL")  # type: ignore[arg-type]  # SEARCH 允許 charset=None
+                if typ != "OK" or not data or data[0] is None:
+                    return []
+                all_uids = [u.decode() for u in data[0].split()]
+                total = len(all_uids)
+                remaining = [u for u in all_uids if u not in collected]
+                for batch in _chunked(remaining, self._fetch_batch):
+                    typ, msg_data = self._conn.uid(
+                        "fetch",
+                        ",".join(batch),
+                        # 必須顯式索取 UID（置於 BODY 之前）：批次 FETCH 只能從回應 metadata 解析 UID，
+                        # 未索取時 Outlook 不回 UID，會產出 uid 全空、無法分類的工作表（0.5.0 致命回歸）。
+                        "(UID BODY.PEEK[HEADER.FIELDS (SUBJECT FROM TO DATE)])",
+                    )
+                    if typ != "OK":
+                        # 批次失敗不可靜默吞（會回傳不完整標頭、誤導後續分類）：大聲報錯。
+                        raise BackendError(f"讀取標頭失敗（{typ}）：{folder} 的批次 FETCH 未成功，請重試。")
+                    for part in msg_data or []:
+                        if not isinstance(part, tuple) or len(part) < 2 or part[1] is None:
+                            continue
+                        uid = _extract_uid(part[0])
+                        if not uid:
+                            # 解析不到 UID 即協定異常：寧可大聲中止，也不靜默吐出 uid 空白、
+                            # 後續完全無法搬移的「無效工作表」（避免重演靜默資料汙染）。
+                            raise BackendError(
+                                f"讀取標頭失敗：無法從回應解析 UID（{folder}）。已中止以免"
+                                "產生缺 UID 的無效工作表；請重試，若持續發生請回報。"
+                            )
+                        msg = _HEADER_PARSER.parsebytes(part[1])  # P7：只解析表頭（輸出等價）
+                        collected[uid] = MailHeader(
                             uid=uid,
                             subject=_decode(msg.get("Subject")),
                             sender=_decode(msg.get("From")),
                             date=_decode(msg.get("Date")),
                             recipients=_decode(msg.get("To")),
                         )
-                    )
-            done = min(done + len(batch), total)
-            if on_progress is not None:
-                on_progress(done, total)
-        return headers
+                    if on_progress is not None:
+                        on_progress(len(collected), total)  # 進度延續：已取得數跨重連不歸零
+                    failures = 0  # 成功一批 → 重置失敗計數（容許多次中斷各自續抓）
+                return [collected[u] for u in all_uids if u in collected]  # SEARCH 序、無重複/遺漏
+            except ReauthRequired:
+                raise
+            except Exception as exc:
+                if not self._is_session_lost(exc) or failures >= self._max_reconnect_attempts:
+                    raise  # 非連線類錯誤、或重連用盡 → 如實外拋（不靜默回傳不完整標頭）
+                failures += 1
+                self._status(f"連線中斷，重新連線中…（第 {failures}/{self._max_reconnect_attempts} 次）")
+                self._sleep_backoff(failures)
+                self._reconnect()
+                self._status("已重新連線，繼續讀取。")
+
+    def _current_uidvalidity(self) -> str | None:
+        """目前選取夾的 UIDVALIDITY（取自 imaplib 上次 SELECT/EXAMINE 的 untagged 回應）。
+        用於偵測重連後信箱是否被重建（UIDVALIDITY 變更 → 過時 UID 進度須作廢重抓）。"""
+        resp = self._conn.untagged_responses.get("UIDVALIDITY")
+        if resp:
+            v = resp[-1]
+            return v.decode() if isinstance(v, (bytes, bytearray)) else str(v)
+        return None
 
     def list_inbox_headers(self, mailbox: str = "INBOX") -> list[MailHeader]:
         """相容保留：等同 list_headers(mailbox)。"""

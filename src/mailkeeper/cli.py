@@ -138,6 +138,7 @@ def _connect() -> Iterator[MailBackend]:
         max_retries_per_op=cfg.max_retries_per_op,
         backoff_base_seconds=cfg.backoff_base_seconds,
         backoff_cap_seconds=cfg.backoff_cap_seconds,
+        fetch_batch_size=cfg.fetch_batch_size,
     ) as client:
         yield client
 

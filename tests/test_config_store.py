@@ -28,6 +28,21 @@ def test_load_missing_raises_not_found(tmp_cwd):
         config_store.load()
 
 
+# --- feature 008: fetch_batch_size (P6) ---
+
+def test_load_fetch_batch_size_default_invalid_and_valid(tmp_cwd):
+    base = {"client_id": "abc-123", "email": "me@outlook.com"}
+    _write(tmp_cwd, base)
+    assert config_store.load().fetch_batch_size == config.FETCH_BATCH_DEFAULT  # 缺漏→預設
+    for bad in ("abc", 0, -3, None):
+        _write(tmp_cwd, {**base, "fetch_batch_size": bad})
+        assert config_store.load().fetch_batch_size == config.FETCH_BATCH_DEFAULT  # 無效→預設、不崩潰
+    _write(tmp_cwd, {**base, "fetch_batch_size": 200})
+    assert config_store.load().fetch_batch_size == 200  # 正整數生效
+    _write(tmp_cwd, {**base, "fetch_batch_size": 1})
+    assert config_store.load().fetch_batch_size == 1   # 下限 1
+
+
 # --- US2: configuration from the working directory ---
 
 def test_load_valid_returns_configuration(tmp_cwd):

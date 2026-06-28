@@ -46,6 +46,8 @@ class Configuration:
     max_retries_per_op: int = config.MAX_RETRIES_PER_OP
     backoff_base_seconds: float = config.BACKOFF_BASE_SECONDS
     backoff_cap_seconds: float = config.BACKOFF_CAP_SECONDS
+    # feature 008：每批 FETCH 標頭封數（可選；無效/缺漏退預設 50、下限 1）。
+    fetch_batch_size: int = config.FETCH_BATCH_DEFAULT
 
 
 def config_path(cwd: Path | None = None) -> Path:
@@ -175,6 +177,9 @@ def load(cwd: Path | None = None) -> Configuration:
         ),
         backoff_base_seconds=backoff_base,
         backoff_cap_seconds=backoff_cap,
+        fetch_batch_size=_as_positive_int(
+            data.get("fetch_batch_size"), config.FETCH_BATCH_DEFAULT
+        ),
     )
 
 
