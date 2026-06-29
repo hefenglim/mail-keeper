@@ -97,7 +97,7 @@
   <p class="sub">P1–P7 精緻解說 · 情景演示 · 前後對比圖 · 量化效果 &nbsp;|&nbsp; 基於知識圖譜熱點 + 實際讀碼 + IMAP 模擬器實測，非臆測</p>
   <p class="sub">
     <span class="pill">評估日期：2026-06-27</span>
-    <span class="pill">最後更新：2026-06-29（P5/P6/P7 已完成 v0.6.3 · feature 008；P2/P3/P4 v0.6.2；backlog C1/C2 已修）</span>
+    <span class="pill">最後更新：2026-06-29（P1–P7 全數完成：v0.6.1/v0.6.2/v0.6.3；backlog C1/C2→v0.6.2、C3→v0.6.4 全數修復）</span>
     <span class="pill">適用版本基準：v0.6.0</span>
     <span class="pill">文件性質：living doc（完成優化須回填狀態與版本號）</span>
   </p>
@@ -537,7 +537,8 @@ After :  批1 ✓ 批2 ✓ … 批199 ✓  ← 斷線  重連後 → <span style
     <tr><td>2026-06-28</td><td>v0.6.0</td><td>加入 <b>IMAP 模擬器實測基準</b>（分類 1,205 往返／200 FETCH／499 redundant SELECT／500 MOVE／下傳 1.63MB；匯出 204）、<b>狀態追蹤表</b>＋維護準則、修訂紀錄。實測證實估計方向正確。</td></tr>
     <tr><td>2026-06-28</td><td><b>v0.6.1</b></td><td><b>P1 落地</b>（feature 006）：分類存在性檢查改 <code>list_uids</code>（<code>UID SEARCH ALL</code>，含已標刪），報告階段整夾標頭 FETCH=0、下載降 ≥90%、判定/搬移等價現況；狀態表 P1→✅ 已完成。P4 確認延至 P2/P3。</td></tr>
     <tr><td>2026-06-29</td><td><b>v0.6.2</b></td><td><b>P4+P3+P2 落地</b>（feature 007）：候選分組、免重複 SELECT（redundant_selects→0）、批次 `UID MOVE`（N→⌈N/批⌉）；後備搬移冪等以目標 Message-ID 去重（修 backlog C1）。狀態表 P2/P3/P4→✅、C1/C2→已修。271 tests 全綠。</td></tr>
-    <tr><td>2026-06-29</td><td><b>v0.6.3</b></td><td><b>P5+P6+P7 落地</b>（feature 008）：list_headers 重連可續傳（差集只抓剩餘、不整批重抓；UIDVALIDITY 變更安全重抓；進度延續）、<code>fetch_batch_size</code> 可調（⌈N/M⌉）、header-only 解析（輸出等價）。狀態表 P5/P6/P7→✅。279 tests 全綠、imap_client 92%。<b>效能 roadmap P1–P7 全數完成</b>（餘 backlog C3）。</td></tr>
+    <tr><td>2026-06-29</td><td><b>v0.6.3</b></td><td><b>P5+P6+P7 落地</b>（feature 008）：list_headers 重連可續傳（差集只抓剩餘、不整批重抓；UIDVALIDITY 變更安全重抓；進度延續）、<code>fetch_batch_size</code> 可調（⌈N/M⌉）、header-only 解析（輸出等價）。狀態表 P5/P6/P7→✅。279 tests 全綠、imap_client 92%。<b>效能 roadmap P1–P7 全數完成</b>（餘 backlog C3，已於 v0.6.4 修）。</td></tr>
+    <tr><td>2026-06-29</td><td><b>v0.6.4</b></td><td><b>backlog C3 收尾</b>（chore/c3-fold-whitespace）：`_unfold` 去除值起始的前導折疊空白（不合規折行還原版本無關）；引擎 `malformed_fold` 測試改精確相等 + 加 `_decode` 版本無關單元測試。<b>效能 P1–P7 與韌性 backlog C1/C2/C3 全數結清</b>。280 tests 全綠。</td></tr>
   </table>
 
   <div class="foot">
