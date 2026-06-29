@@ -73,8 +73,11 @@ class MailHeader:
 
 
 def _unfold(value: str) -> str:
-    """攤平折疊標題：把換行＋後續空白還原為單一空白，讓被拆段的 encoded-word 重新相鄰。"""
-    return re.sub(r"\r?\n[ \t]+", " ", value)
+    """攤平折疊標題：把換行＋後續空白還原為單一空白，讓被拆段的 encoded-word 重新相鄰；
+    並去除**值起始的前導折疊空白**（backlog C3）——不合規折行（值落續行）經 email 攤平後，
+    3.10 會殘留前導空白而 3.12 已去除；這裡統一去除使輸出版本無關。前導折疊空白依 RFC 5322
+    為冒號後的選用 WSP、不具語意，去除安全。"""
+    return re.sub(r"\r?\n[ \t]+", " ", value).lstrip(" \t")
 
 
 def _decode_chunk(raw: Any, charset: str | None) -> str:

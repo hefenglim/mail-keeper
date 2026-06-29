@@ -36,6 +36,14 @@ def test_decode_folded_multisegment():
     assert "=?" not in out  # no raw encoded-word leaks
 
 
+def test_decode_strips_leading_fold_whitespace():
+    # backlog C3：不合規折行使值落續行，email 攤平後可能殘留前導折疊空白（3.10 保留、3.12 已去）。
+    # _decode 須去除前導折疊空白 → 輸出版本無關；內部折疊空白仍正規化為單一空白。
+    assert _decode(" Quarterly Report") == "Quarterly Report"        # 前導空白（無換行）→ 去除
+    assert _decode("\r\n Quarterly Report") == "Quarterly Report"    # 含換行續行 → 去除
+    assert _decode("Hello\r\n World") == "Hello World"               # 內部折疊空白 → 單一空白（保留）
+
+
 def test_decode_unknown_charset_recovers_via_detection():
     b = base64.b64encode("测试".encode("utf-8")).decode("ascii")
     val = f"=?x-unknown-charset?B?{b}?="

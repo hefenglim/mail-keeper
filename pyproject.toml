@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mailkeeper"
-version = "0.6.3"
+version = "0.6.4"
 description = "替你看管收件匣 —— 登入 Outlook.com IMAP，讀取郵件標題並依規則自動整理"
 readme = "README.md"
 requires-python = ">=3.10"

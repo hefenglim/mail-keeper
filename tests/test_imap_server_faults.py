@@ -286,18 +286,14 @@ def test_malformed_fold_emits_deterministic_noncompliant_wire():
 def test_malformed_fold_product_recovers_content_version_independent(monkeypatch):
     # 產品異常路徑：對不合規折行仍穩健還原內容、不崩潰；斷言以內容比對 → 版本無關。
     #
-    # ⚠ `.strip()` 是**承重的**，非美化（SR 條件）：不合規折行使值落在續行，產品 `_decode`/`_unfold`
-    # 對「續行前導折疊空白」的處理隨 Python 版本而異——3.12 的 `email` 解析時已去除（→ "Quarterly
-    # Report"），但 **3.10 會保留前導空白**（→ " Quarterly Report"），且產品 `_unfold` 只摺疊含換行的
-    # 續行、不會去掉 email 已攤平後殘留的前導空白。故此處以 `.strip()` 後內容比對作版本無關斷言——
-    # 它**驗證「內容正確還原、未崩潰、未漏字/亂序」**，但**刻意不**斷言前導空白的有無。
-    # 這是**已知產品限制**（不合規折行下前導空白可能殘留）；正解屬產品強化（`_unfold`/`_decode`
-    # 去前導折疊空白），記於 backlog [[roadmap-backlog]]，本（模擬器）分支不動產品碼。
+    # backlog C3 已修：產品 `_unfold` 去除值起始的前導折疊空白 → 不合規折行的還原**版本無關**，
+    # 故改為**精確相等**斷言（不再用 `.strip()` 容忍前導空白）。3.10 曾殘留前導空白、3.12 由 email
+    # 去除；現由產品統一去除，兩版皆得 "Quarterly Report"。
     server = ImapServer(
         {"INBOX": [message(10, "Quarterly Report", "boss@x.com", "me@x.com", "Mon")]},
         malformed_fold=True,
     )
     headers = connected_client(monkeypatch, server).list_headers("INBOX")
     assert len(headers) == 1 and headers[0].uid == "10"
-    assert headers[0].subject.strip() == "Quarterly Report"      # 內容正確還原（前導空白容忍，見上）
-    assert headers[0].sender.strip() == "boss@x.com"
+    assert headers[0].subject == "Quarterly Report"      # 精確相等：前導折疊空白已去除（版本無關）
+    assert headers[0].sender == "boss@x.com"
