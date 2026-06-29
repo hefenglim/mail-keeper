@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.5] - 2026-06-30
+### Fixed — 資料夾名稱編碼與引號（深度 Senior Review 發現 F1/F2/F3，封鎖級）
+- **F1 非 ASCII 夾名崩潰**：外送資料夾名稱現先以 modified-UTF-7 編碼（新增 `_encode_mutf7`，為 `_decode_mutf7` 的逆）再送出。先前 CJK 夾（如「台北」）的 select／建立／搬移會 `UnicodeEncodeError`（imaplib 對引數做 ASCII 編碼），匯出/分類對 CJK 夾整路崩潰。
+- **F2 含空白夾名未加引號**：外送資料夾名稱現一律以 quoted-string 包裹（跳脫 `\` 與 `"`）。先前 Outlook 內建含空白夾（`Junk Email`／`Deleted Items`／`Sent Items`）未加引號 → 被 RFC 3501 伺服器拒絕，寬鬆伺服器上更可能誤搬。新增 `_mailbox_arg`（mUTF-7 編碼 + 加引號）套用於 select／examine／create／copy／move。
+- **F3 模擬器保真**：IMAP 模擬器引擎現要求信箱名為 atom 或 quoted-string——未加引號含空白即回 `BAD`（真伺服器亦然），並對 inbound 名稱解 mUTF-7。先前引擎接受未加引號的多字夾名而**遮蔽** F2；現能抓出此類回歸。
+### Tests
+- 保真（引擎直驅真 imaplib）：quoted 空白/CJK 夾名接受、未加引號含空白拒絕（BAD）。產品（真 client over 引擎）：CJK 夾 `list_uids("台北")`、含空白夾 `move_many(…, "Junk Email")` 搬移成功且**不誤搬**入陷阱夾 `Junk`、不波及他人 `\Deleted`。283 passed、mypy 乾淨、imap_client 92% 覆蓋。
+
 ## [0.6.4] - 2026-06-29
 ### Fixed — 標頭前導折疊空白（backlog C3，防禦性強化）
 - `_unfold` 現在去除**值起始的前導折疊空白**：對「不合規折行」（值落續行）的標頭，Python 3.10 的 `email` 攤平後會殘留前導空白、3.12 已去除——現由產品統一去除，使標頭解碼（主旨/寄件者等）**版本無關**、輸出一致。前導折疊空白依 RFC 5322 為冒號後的選用 WSP、不具語意，去除安全；真實 Outlook 不這樣折行，屬防禦性強化（無一般使用情境的行為變更）。

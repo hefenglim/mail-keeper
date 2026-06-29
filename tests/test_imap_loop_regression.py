@@ -23,7 +23,8 @@ from imap_dataset import (
     bulk_server,
     fresh_server,
 )
-from imap_sim import DELETED
+from imap_server import ImapServer
+from imap_sim import DELETED, message
 from imap_transport import connected_client
 
 from mailkeeper import classifier
@@ -211,6 +212,28 @@ def test_list_headers_reconnect_status_is_secret_free(monkeypatch):
     client.list_headers("INBOX")
     assert any("重新連線" in s for s in statuses)                       # 恢復期間有狀態
     assert all("super-secret-token" not in s for s in statuses)        # 狀態絕不含 token
+
+
+def test_select_cjk_folder_encodes_mutf7(monkeypatch):
+    # F1：CJK 夾名（台北）的 select 不再 UnicodeEncodeError —— 產品經 _mailbox_arg（mUTF-7 + 引號）外送。
+    server = fresh_server()  # 母版含 台北（uid 401）
+    client = connected_client(monkeypatch, server)
+    assert client.list_uids("台北") == {"401"}
+
+
+def test_move_into_spaced_folder_quotes_name(monkeypatch):
+    # F2：含空白夾名（如 Outlook 內建 'Junk Email'）正確加引號 → 引擎/真伺服器接受、搬移成功、不誤搬。
+    server = ImapServer({
+        "INBOX": [message(101, "x"), message(106, "d", flags={DELETED})],
+        "Junk Email": [],
+        "Junk": [],   # 陷阱：若未加引號，'UID MOVE 101 Junk Email' 在寬鬆伺服器可能誤搬到既有 'Junk'
+    })
+    client = connected_client(monkeypatch, server)
+    out = client.move_many(["101"], "Junk Email", "INBOX")
+    assert out == {"101": None}
+    assert len(server.mailboxes["Junk Email"]) == 1 and len(server.mailboxes["Junk"]) == 0
+    assert 101 not in {m.uid for m in server.mailboxes["INBOX"]}
+    assert 106 in {m.uid for m in server.mailboxes["INBOX"]}  # 他人 \Deleted 不被波及
 
 
 def test_move_loop_avoids_redundant_select(monkeypatch):

@@ -144,6 +144,57 @@ def _encode_mutf7(name: str) -> str:
     return "".join(out)
 
 
+def _decode_mutf7(name: str) -> str:
+    """IMAP modified-UTF-7 解碼（RFC 3501 §5.1.3）—— :func:`_encode_mutf7` 的逆；引擎收端用以
+    把產品送來的（已編碼）信箱名還原為邏輯名以比對 mailbox dict。對應產品 ``imap_client._decode_mutf7``。"""
+    if "&" not in name:
+        return name
+    out: list[str] = []
+    i = 0
+    while i < len(name):
+        ch = name[i]
+        if ch != "&":
+            out.append(ch)
+            i += 1
+            continue
+        end = name.find("-", i + 1)
+        if end == -1:
+            out.append(name[i:])
+            break
+        chunk = name[i + 1 : end]
+        if chunk == "":
+            out.append("&")
+        else:
+            b64 = chunk.replace(",", "/")
+            b64 += "=" * ((4 - len(b64) % 4) % 4)
+            try:
+                out.append(base64.b64decode(b64).decode("utf-16-be"))
+            except Exception:
+                out.append(name[i : end + 1])
+        i = end + 1
+    return "".join(out)
+
+
+def _decode_mailbox_arg(raw: str) -> str | None:
+    """解析 SELECT/EXAMINE/CREATE/COPY/MOVE 的信箱名引數（鏡像產品 ``_mailbox_arg``）。
+
+    * quoted-string（``"..."``）→ 去引號 + 反跳脫（``\\"``/``\\\\``）+ 解 mUTF-7。
+    * atom（無引號、無空白）→ 解 mUTF-7。
+    * **未加引號卻含空白** → 違反 RFC 3501（mailbox name 須為 atom 或 quoted-string）→ 回 ``None``，
+      呼叫端應回 ``BAD``。此保真讓引擎能抓出「外送夾名未加引號」這類產品 bug（如 Outlook 內建
+      ``Junk Email``/``Deleted Items``），真實伺服器同樣拒絕。
+    """
+    raw = raw.strip()
+    if raw[:1] == '"':
+        if len(raw) < 2 or raw[-1] != '"':
+            return None  # 引號未閉合 → 語法錯誤
+        inner = raw[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+        return _decode_mutf7(inner)
+    if " " in raw:
+        return None      # 未加引號卻含空白 → 拒絕
+    return _decode_mutf7(raw)
+
+
 def _parse_uidset(spec: Any) -> list[int]:
     """解析 UID 集合：支援 '10'、'10,11,12'、'10:12'（含端點）。"""
     s = spec.decode() if isinstance(spec, (bytes, bytearray)) else str(spec)
