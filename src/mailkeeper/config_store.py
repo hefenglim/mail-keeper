@@ -102,15 +102,6 @@ def _as_int(value: Any, default: int, field: str, path: Path) -> int:
         raise ConfigError(f"設定檔 {path} 的 '{field}' 必須是整數。") from None
 
 
-def _as_float(value: Any, default: float, field: str, path: Path) -> float:
-    if value is None:
-        return default
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        raise ConfigError(f"設定檔 {path} 的 '{field}' 必須是數字。") from None
-
-
 def _as_positive_int(value: Any, default: int) -> int:
     """正整數否則退預設（韌性設定：無效永不崩潰，FR-008）。"""
     try:
