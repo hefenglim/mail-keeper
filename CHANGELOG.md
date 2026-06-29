@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.6] - 2026-06-30
+### Fixed / Changed — 深度 Senior Review 後續強化（F4–F10）
+- **F4 CSV 公式注入**：`write_worksheet`/`write_folders` 對以 `= + - @`（或 tab/CR）開頭的儲存格前綴 `'`（`_csv_safe`），避免 Excel/試算表把惡意主旨（如 `=HYPERLINK(...)`）當公式執行。
+- **F5 整夾 EXPUNGE 連坐**：伺服器同時不支援 MOVE 且不支援 UIDPLUS 的後備路徑，現**僅在來源夾無其他 `\Deleted` 時**才整夾 EXPUNGE；否則大聲失敗（`BackendError`），絕不連坐他人已標刪郵件。
+- **F6 韌性一致**：`ensure_folder`/`mark_read`/`flag` 改包 `_with_reconnect`，與其他操作一致（瞬斷透明重連，不再中止整個分類）。
+- **F7 文件誠實**：更正 `move` docstring——後備搬移自 C1（v0.6.2）起已冪等（目標夾 Message-ID 去重），不再產生重複複本。
+- **F8 架構解耦**：新增中性 `domain.py`，`MailHeader`/`ReauthRequired`/`MailBackend` 移入；上層與後端皆從 `domain` import（`imap_client`/`organizer` 仍 re-export 保相容），使換後端（如未來 Graph）真正 trivial。
+- **F9 設定驗證**：`timeout` 改用正數驗證（0／負／無效 → 退安全預設），與其他韌性參數一致。
+- **F10 CSV 輸入防禦**：`read_worksheet` 拒絕欄位含控制字元（C0／DEL），不再倚賴 `splitlines()` 巧合中和的注入防護。
+### Tests
+- TDD（Red→Green，跨 seam 一律走 IMAP 模擬器引擎）：公式注入中和、整夾 EXPUNGE 拒連坐／安全情況才清、`ensure_folder` 重連、`timeout` 退預設、控制字元拒絕。290 passed、mypy 乾淨、imap_client 92% 覆蓋。
+
 ## [0.6.5] - 2026-06-30
 ### Fixed — 資料夾名稱編碼與引號（深度 Senior Review 發現 F1/F2/F3，封鎖級）
 - **F1 非 ASCII 夾名崩潰**：外送資料夾名稱現先以 modified-UTF-7 編碼（新增 `_encode_mutf7`，為 `_decode_mutf7` 的逆）再送出。先前 CJK 夾（如「台北」）的 select／建立／搬移會 `UnicodeEncodeError`（imaplib 對引數做 ASCII 編碼），匯出/分類對 CJK 夾整路崩潰。

@@ -149,7 +149,7 @@ def load(cwd: Path | None = None) -> Configuration:
     )
     imap_host = str(data.get("imap_host") or config.IMAP_HOST)
     imap_port = _as_int(data.get("imap_port"), config.IMAP_PORT, "imap_port", path)
-    timeout = _as_float(data.get("timeout"), config.IMAP_TIMEOUT, "timeout", path)
+    timeout = _as_positive_float(data.get("timeout"), config.IMAP_TIMEOUT)  # F9：0/負/無效 → 退預設
 
     # R7 韌性設定：無效/缺漏一律退安全預設（永不崩潰）。封頂須 ≥ base。
     backoff_base = _as_positive_float(data.get("backoff_base_seconds"), config.BACKOFF_BASE_SECONDS)

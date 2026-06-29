@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from .imap_client import MailHeader
+from .domain import MailHeader
 
 # 固定欄位順序（全英文表頭，利於 AI／試算表穩健解析）。
 WORKSHEET_FIELDS = ["uid", "current_folder", "target_folder", "date", "from", "to", "subject"]
@@ -48,6 +48,24 @@ def ensure_csv_suffix(name: str) -> str:
     return name.rstrip(".") + ".csv"
 
 
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value: str) -> str:
+    """中和試算表公式注入（SR F4）：開頭為 `= + - @`（或 tab/CR）的儲存格前綴單引號，讓
+    Excel/試算表當**文字**而非公式執行（攻擊者可控的主旨/寄件者可能是 `=HYPERLINK(...)` 等）。
+    僅用於顯示型欄位（date/from/to/subject）——不動 uid/資料夾等再匯入的功能欄。"""
+    return "'" + value if value[:1] in _FORMULA_PREFIXES else value
+
+
+def _reject_control_chars(value: str, field: str, path) -> str:
+    """SR F10：欄位含控制字元（C0 / DEL）→ 視為可疑注入 → CsvError。防禦性，不倚賴
+    `read_worksheet` 以 `splitlines()` 丟換行的副作用。"""
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+        raise CsvError(f"CSV {path} 的欄位 '{field}' 含非法控制字元（疑似注入），請移除後重試。")
+    return value
+
+
 def write_worksheet(headers: Iterable[MailHeader], folder: str, path) -> None:
     """把某資料夾的郵件標題寫成分類工作表（`target_folder` 留空）。已存在則覆寫。"""
     try:
@@ -55,7 +73,10 @@ def write_worksheet(headers: Iterable[MailHeader], folder: str, path) -> None:
             w = csv.writer(f)
             w.writerow(WORKSHEET_FIELDS)
             for h in headers:
-                w.writerow([h.uid, folder, "", h.date, h.sender, h.recipients, h.subject])
+                w.writerow([
+                    h.uid, folder, "",
+                    _csv_safe(h.date), _csv_safe(h.sender), _csv_safe(h.recipients), _csv_safe(h.subject),
+                ])
     except OSError as exc:
         raise CsvError(f"無法寫入 CSV {path}：{exc}") from exc
 
@@ -67,7 +88,7 @@ def write_folders(folders: Iterable[str], path) -> None:
             w = csv.writer(f)
             w.writerow(FOLDERS_FIELDS)
             for name in folders:
-                w.writerow([name])
+                w.writerow([_csv_safe(name)])
     except OSError as exc:
         raise CsvError(f"無法寫入 CSV {path}：{exc}") from exc
 
@@ -90,9 +111,9 @@ def read_worksheet(path) -> list[ClassificationRow]:
     for raw in reader:
         rows.append(
             ClassificationRow(
-                uid=(raw.get("uid") or "").strip(),
-                current_folder=(raw.get("current_folder") or "").strip(),
-                target_folder=(raw.get("target_folder") or "").strip(),
+                uid=_reject_control_chars((raw.get("uid") or "").strip(), "uid", path),
+                current_folder=_reject_control_chars((raw.get("current_folder") or "").strip(), "current_folder", path),
+                target_folder=_reject_control_chars((raw.get("target_folder") or "").strip(), "target_folder", path),
             )
         )
     return rows

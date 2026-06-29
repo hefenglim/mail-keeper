@@ -16,7 +16,6 @@ import re
 import socket
 import ssl
 import time
-from dataclasses import dataclass
 from email.header import decode_header
 from email.parser import BytesHeaderParser
 from typing import Any, Callable, Iterator, TypeVar
@@ -24,18 +23,10 @@ from typing import Any, Callable, Iterator, TypeVar
 import charset_normalizer
 
 from . import config
+from .domain import MailHeader, ReauthRequired  # 後端中立領域型別（re-export 保相容）
 
 # 後端中立的錯誤別名：讓上層 (cli) 不必直接 import imaplib，維持 seam 純度。
 BackendError = imaplib.IMAP4.error
-
-
-class ReauthRequired(Exception):
-    """需使用者重新登入的終結訊號（非暫時性、不重試）。
-
-    後端中立：定義在此而非 auth.py，使 `imap_client` 不必 import MSAL（憲法 Principle I）；
-    `auth` 與 `cli` 反向 import 本類別。訊息**絕不**含 token/secret（Principle IV）。
-    """
-
 
 _HEADER_PARSER = BytesHeaderParser()  # P7：header-only 解析（只解析表頭、不建構 body 結構；輸出等價 message_from_bytes）
 _UID_RE = re.compile(rb"UID (\d+)")
@@ -59,17 +50,6 @@ def _extract_uid(meta: Any) -> str:
         if m:
             return m.group(1).decode()
     return ""
-
-
-@dataclass(frozen=True)
-class MailHeader:
-    """一封郵件的標題資訊 (上層只看得到這個，看不到 imaplib)。"""
-
-    uid: str
-    subject: str
-    sender: str
-    date: str
-    recipients: str = ""
 
 
 def _unfold(value: str) -> str:
@@ -442,20 +422,20 @@ class OutlookIMAPClient:
 
     # ---------- 整理動作 ----------
     def ensure_folder(self, folder: str) -> None:
-        """確保資料夾存在 (已存在會回 NO，直接忽略即可)。"""
-        self._conn.create(_mailbox_arg(folder))
+        """確保資料夾存在 (已存在會回 NO，直接忽略即可)；連線中斷透明重連（F6，與其他 op 一致）。"""
+        self._with_reconnect(lambda: self._conn.create(_mailbox_arg(folder)))
 
     def move(self, uid: str, dest_folder: str, mailbox: str = "INBOX") -> None:
         """將郵件搬到指定資料夾。優先用 UID MOVE；伺服器不支援時退回 copy→標刪→UID EXPUNGE。
         連線中斷會透明重連並重試本次搬移（搬移自含 select）。主路徑 UID MOVE 重試**冪等**
-        （重搬已搬走的郵件為 no-op）；惟 **fallback 非完全冪等**：若於 COPY 成功後、UID EXPUNGE
-        前斷線，重試會重做 COPY → 目標夾可能出現**重複複本**（非資料遺失，來源仍正確移除）。
-        此為已知限制（見 roadmap-backlog；正解需重試前先偵測既有複本或改用更原子的序列）。
+        （重搬已搬走的郵件為 no-op）；**fallback 亦冪等**（C1）：重試前以目標夾 Message-ID 偵測既有
+        複本，已複製則跳過 COPY，故 COPY 後/標刪後斷線重試都不會產生重複複本。
 
         安全鐵則（破壞性動作，避免資料遺失）：
           1. **COPY 成功才標刪**：copy 未成功就絕不 `\\Deleted`+expunge（沒有複本就刪 = 永久遺失）。
-          2. **以 UID EXPUNGE 限定該封**（RFC 4315 UIDPLUS），避免整夾 EXPUNGE 波及其他
-             已被標 `\\Deleted` 的郵件；僅在伺服器不支援 UIDPLUS 時才退回整夾 EXPUNGE。
+          2. **以 UID EXPUNGE 限定該封**（RFC 4315 UIDPLUS），避免整夾 EXPUNGE 波及其他已被標
+             `\\Deleted` 的郵件；伺服器不支援 UIDPLUS 時，**僅在來源夾無其他 `\\Deleted` 才整夾
+             EXPUNGE，否則大聲失敗、絕不連坐**（F5）。
         """
         self._with_reconnect(lambda: self._move_impl(uid, dest_folder, mailbox))
 
@@ -479,7 +459,19 @@ class OutlookIMAPClient:
         self._conn.uid("store", uid, "+FLAGS", "(\\Deleted)")
         typ, _ = self._conn.uid("expunge", uid)  # UID EXPUNGE：只清這封
         if typ != "OK":
-            # 伺服器無 UIDPLUS：別無選擇只能整夾 EXPUNGE（此後備路徑仍可能波及其他已標刪郵件）。
+            # 伺服器無 UIDPLUS：整夾 EXPUNGE 會連坐其他已標 \Deleted 郵件。僅當來源夾「除這封外無
+            # 其他 \Deleted」時才安全整夾 EXPUNGE；否則大聲失敗、絕不連坐（F5）。
+            typ, data = self._conn.uid("search", None, "DELETED")  # type: ignore[arg-type]
+            others = [
+                u for u in (data[0].split() if typ == "OK" and data and data[0] else [])
+                if u.decode() != uid
+            ]
+            if others:
+                raise BackendError(
+                    f"搬移無法安全完成：伺服器不支援 UID EXPUNGE，且來源夾尚有其他已標刪郵件，"
+                    f"整夾清除會波及它們。已複製到 {dest_folder} 並標記來源刪除（uid={uid}），"
+                    "請手動清除來源夾後再試。"
+                )
             self._conn.expunge()
 
     def _uid_present(self, uid: str) -> bool:
@@ -564,9 +556,11 @@ class OutlookIMAPClient:
         return results
 
     def mark_read(self, uid: str, mailbox: str = "INBOX") -> None:
-        self._ensure_selected(mailbox)
-        self._conn.uid("store", uid, "+FLAGS", "(\\Seen)")
+        self._with_reconnect(lambda: self._store_flag_impl(uid, "(\\Seen)", mailbox))  # F6：包重連
 
     def flag(self, uid: str, mailbox: str = "INBOX") -> None:
+        self._with_reconnect(lambda: self._store_flag_impl(uid, "(\\Flagged)", mailbox))  # F6
+
+    def _store_flag_impl(self, uid: str, flags: str, mailbox: str) -> None:
         self._ensure_selected(mailbox)
-        self._conn.uid("store", uid, "+FLAGS", "(\\Flagged)")
+        self._conn.uid("store", uid, "+FLAGS", flags)
