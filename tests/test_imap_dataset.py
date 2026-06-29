@@ -31,7 +31,7 @@ def _no_sleep(monkeypatch) -> None:
 
 def test_master_covers_required_scenarios():
     mb = master_mailboxes()
-    assert set(mb) == {"INBOX", "Sent", "Archive", "Work/Projects", "台北"}
+    assert set(mb) == {"INBOX", "Sent", "Archive", "Work/Projects", "台北", "R&D", "VIP客戶"}
     inbox = {m.uid: m for m in mb["INBOX"]}
     assert len(inbox) == 8
     assert SEEN in inbox[INBOX_SEEN_UID].flags
