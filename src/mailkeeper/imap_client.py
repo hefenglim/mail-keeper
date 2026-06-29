@@ -138,6 +138,39 @@ def _decode_mutf7(name: str) -> str:
     return "".join(out)
 
 
+def _encode_mutf7(name: str) -> str:
+    """資料夾名稱 → IMAP modified-UTF-7（RFC 3501 §5.1.3）—— `_decode_mutf7` 的逆。
+    非 ASCII 連續段以 UTF-16BE + modified-BASE64（`/`→`,`、去 `=` padding）包在 `&...-` 內，
+    `&` 自身寫成 `&-`。imaplib 送出前會對引數做 ASCII 編碼，故非 ASCII 夾名**必須**先編成此形式
+    （否則 `UnicodeEncodeError`，見 backlog F1）。"""
+    out: list[str] = []
+    i, n = 0, len(name)
+    while i < n:
+        ch = name[i]
+        if ch == "&":
+            out.append("&-")
+            i += 1
+        elif 0x20 <= ord(ch) <= 0x7E:
+            out.append(ch)
+            i += 1
+        else:
+            j = i
+            while j < n and not (0x20 <= ord(name[j]) <= 0x7E):
+                j += 1
+            b64 = base64.b64encode(name[i:j].encode("utf-16-be")).decode("ascii")
+            out.append("&" + b64.rstrip("=").replace("/", ",") + "-")
+            i = j
+    return "".join(out)
+
+
+def _mailbox_arg(name: str) -> str:
+    """把資料夾名轉成可安全送上線的 IMAP 引數：先 modified-UTF-7 編碼（F1），再以 quoted-string
+    包裹並跳脫 `\\`/`"`（F2）。imaplib 不會自動為信箱名加引號，含空白的夾名（如 Outlook 內建
+    `Junk Email`/`Deleted Items`）未加引號會被伺服器拒絕或誤解析，故一律加引號。"""
+    enc = _encode_mutf7(name).replace("\\", "\\\\").replace('"', '\\"')
+    return '"' + enc + '"'
+
+
 def _parse_folder_name(line: Any) -> str:
     """從一條 IMAP LIST 回應取出資料夾名稱（處理引號與 modified-UTF-7）。"""
     s = line.decode() if isinstance(line, (bytes, bytearray)) else str(line)
@@ -276,7 +309,7 @@ class OutlookIMAPClient:
         連線／重連後 `self._selected` 已重置為 None，故重連後必重新選取。"""
         if self._selected == (mailbox, readonly):
             return
-        self._conn.select(mailbox, readonly=readonly)
+        self._conn.select(_mailbox_arg(mailbox), readonly=readonly)
         self._selected = (mailbox, readonly)
 
     # ---------- 讀取 ----------
@@ -410,7 +443,7 @@ class OutlookIMAPClient:
     # ---------- 整理動作 ----------
     def ensure_folder(self, folder: str) -> None:
         """確保資料夾存在 (已存在會回 NO，直接忽略即可)。"""
-        self._conn.create(folder)
+        self._conn.create(_mailbox_arg(folder))
 
     def move(self, uid: str, dest_folder: str, mailbox: str = "INBOX") -> None:
         """將郵件搬到指定資料夾。優先用 UID MOVE；伺服器不支援時退回 copy→標刪→UID EXPUNGE。
@@ -428,7 +461,7 @@ class OutlookIMAPClient:
 
     def _move_impl(self, uid: str, dest_folder: str, mailbox: str) -> None:
         self._ensure_selected(mailbox)
-        typ, _ = self._conn.uid("move", uid, dest_folder)
+        typ, _ = self._conn.uid("move", uid, _mailbox_arg(dest_folder))
         if typ == "OK":
             return
 
@@ -437,7 +470,7 @@ class OutlookIMAPClient:
         if not self._uid_present(uid):
             return  # 來源已無此 uid → 前次已完整搬走（no-op，重試安全）
         if not self._dest_has_copy(uid, dest_folder, mailbox):
-            typ, _ = self._conn.uid("copy", uid, dest_folder)
+            typ, _ = self._conn.uid("copy", uid, _mailbox_arg(dest_folder))
             if typ != "OK":
                 raise BackendError(
                     f"搬移失敗：COPY 未成功（{typ}），已中止且未刪除來源郵件"
@@ -472,7 +505,7 @@ class OutlookIMAPClient:
         mid = self._message_id(uid)
         if not mid:
             return False
-        typ, _ = self._conn.select(dest_folder, readonly=True)
+        typ, _ = self._conn.select(_mailbox_arg(dest_folder), readonly=True)
         self._selected = (dest_folder, True) if typ == "OK" else None
         try:
             if typ != "OK":
@@ -505,7 +538,7 @@ class OutlookIMAPClient:
         for batch in _chunked(uids, config.MOVE_BATCH_MAX):
             self._ensure_selected(mailbox)
             try:
-                typ, _ = self._conn.uid("move", ",".join(batch), dest_folder)
+                typ, _ = self._conn.uid("move", ",".join(batch), _mailbox_arg(dest_folder))
             except ReauthRequired:
                 raise
             except Exception as exc:
