@@ -15,7 +15,7 @@ from typing import Callable, ContextManager
 
 from . import config
 from .csv_io import ClassificationRow
-from .imap_client import ReauthRequired
+from .domain import ReauthRequired
 from .organizer import MailBackend
 from .progress import ProgressCallback  # 後端中立、無 imaplib，可安全跨層共用
 

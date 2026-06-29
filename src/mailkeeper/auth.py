@@ -11,7 +11,7 @@ import os
 import msal  # type: ignore[import-untyped]  # msal 未提供型別 stub
 
 from .config_store import Configuration
-from .imap_client import ReauthRequired
+from .domain import ReauthRequired
 
 
 def _load_cache(path: str) -> msal.SerializableTokenCache:

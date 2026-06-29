@@ -28,6 +28,17 @@ def test_load_missing_raises_not_found(tmp_cwd):
         config_store.load()
 
 
+# --- SR F9: timeout must be positive (else default) ---
+
+def test_load_timeout_zero_or_negative_falls_back_to_default(tmp_cwd):
+    base = {"client_id": "abc-123", "email": "me@outlook.com"}
+    for bad in (0, -5, "abc", None):
+        _write(tmp_cwd, {**base, "timeout": bad})
+        assert config_store.load().timeout == config.IMAP_TIMEOUT  # 無效/0/負 → 退預設、不崩潰
+    _write(tmp_cwd, {**base, "timeout": 12.5})
+    assert config_store.load().timeout == 12.5                      # 正數生效
+
+
 # --- feature 008: fetch_batch_size (P6) ---
 
 def test_load_fetch_batch_size_default_invalid_and_valid(tmp_cwd):

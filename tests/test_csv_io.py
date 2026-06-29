@@ -59,6 +59,33 @@ def test_read_worksheet_strips_bom(tmp_path):
     assert rows[0].uid == "10" and rows[0].current_folder == "INBOX"
 
 
+def test_write_worksheet_neutralizes_formula_injection(tmp_path):
+    # SR F4：攻擊者可控的主旨/寄件者/收件者若以 = + - @ 開頭，匯出時前綴 ' 以免 Excel 當公式執行
+    headers = [MailHeader("1", '=HYPERLINK("http://evil","x")', "+1+1", "Mon", "@SUM(A1)")]
+    out = tmp_path / "w.csv"
+    csv_io.write_worksheet(headers, "INBOX", out)
+    row = _rows(out)[1]
+    assert row[6].startswith("'=")   # subject
+    assert row[4].startswith("'+")   # from（sender）
+    assert row[5].startswith("'@")   # to（recipients）
+    assert row[0] == "1" and row[1] == "INBOX"  # 功能欄不受影響、可正確再匯入
+
+
+def test_write_folders_neutralizes_formula_injection(tmp_path):
+    # SR F4：資料夾清單同樣中和（共用信箱可能有惡意命名的夾）
+    out = tmp_path / "f.csv"
+    csv_io.write_folders(["INBOX", "=cmd|'/c calc'!A1"], out)
+    assert _rows(out)[2][0].startswith("'=")
+
+
+def test_read_worksheet_rejects_control_chars(tmp_path):
+    # SR F10：欄位含控制字元（如內嵌 tab）→ 視為可疑注入 → CsvError（防禦性，不倚賴 splitlines 巧合）
+    out = tmp_path / "w.csv"
+    out.write_text('uid,current_folder,target_folder\n1,INBOX,"Arch\tive"\n', encoding="utf-8-sig")
+    with pytest.raises(csv_io.CsvError):
+        csv_io.read_worksheet(out)
+
+
 # --- US2: ensure_csv_suffix ---
 
 @pytest.mark.parametrize(

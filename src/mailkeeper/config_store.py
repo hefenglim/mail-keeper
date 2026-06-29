@@ -102,15 +102,6 @@ def _as_int(value: Any, default: int, field: str, path: Path) -> int:
         raise ConfigError(f"設定檔 {path} 的 '{field}' 必須是整數。") from None
 
 
-def _as_float(value: Any, default: float, field: str, path: Path) -> float:
-    if value is None:
-        return default
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        raise ConfigError(f"設定檔 {path} 的 '{field}' 必須是數字。") from None
-
-
 def _as_positive_int(value: Any, default: int) -> int:
     """正整數否則退預設（韌性設定：無效永不崩潰，FR-008）。"""
     try:
@@ -149,7 +140,7 @@ def load(cwd: Path | None = None) -> Configuration:
     )
     imap_host = str(data.get("imap_host") or config.IMAP_HOST)
     imap_port = _as_int(data.get("imap_port"), config.IMAP_PORT, "imap_port", path)
-    timeout = _as_float(data.get("timeout"), config.IMAP_TIMEOUT, "timeout", path)
+    timeout = _as_positive_float(data.get("timeout"), config.IMAP_TIMEOUT)  # F9：0/負/無效 → 退預設
 
     # R7 韌性設定：無效/缺漏一律退安全預設（永不崩潰）。封頂須 ≥ base。
     backoff_base = _as_positive_float(data.get("backoff_base_seconds"), config.BACKOFF_BASE_SECONDS)

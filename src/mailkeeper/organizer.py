@@ -8,29 +8,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Callable
 
-from .imap_client import MailHeader
-
-
-class MailBackend(Protocol):
-    """郵件後端介面。IMAP / Graph 任一實作只要符合這些方法即可互換。"""
-
-    def list_folders(self) -> list[str]: ...
-    def list_headers(
-        self, folder: str = "INBOX", *, on_progress: Callable[[int, int], None] | None = None
-    ) -> list[MailHeader]: ...
-    def list_uids(
-        self, folder: str = "INBOX", *, on_progress: Callable[[int, int], None] | None = None
-    ) -> set[str]: ...
-    def list_inbox_headers(self, mailbox: str = "INBOX") -> list[MailHeader]: ...
-    def ensure_folder(self, folder: str) -> None: ...
-    def move(self, uid: str, dest_folder: str, mailbox: str = "INBOX") -> None: ...
-    def move_many(
-        self, uids: list[str], dest_folder: str, mailbox: str = "INBOX"
-    ) -> dict[str, str | None]: ...
-    def mark_read(self, uid: str, mailbox: str = "INBOX") -> None: ...
-    def flag(self, uid: str, mailbox: str = "INBOX") -> None: ...
+# MailBackend/MailHeader 自中性 `domain` 取得（SR F8）；此處 re-export 維持
+# `from .organizer import MailBackend` 的既有相容。
+from .domain import MailBackend, MailHeader
 
 
 @dataclass

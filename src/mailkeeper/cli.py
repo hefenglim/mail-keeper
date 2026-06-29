@@ -9,7 +9,8 @@ from typing import Callable, Iterator
 
 from . import __version__, buildinfo, classifier, config_store, console, csv_io, menu, progress
 from .auth import get_access_token, get_token_silent
-from .imap_client import BackendError, OutlookIMAPClient, ReauthRequired
+from .domain import ReauthRequired
+from .imap_client import BackendError, OutlookIMAPClient
 from .organizer import MailBackend, MailOrganizer, Rule, from_contains, subject_contains
 
 # 網路 in/out 迴圈用的進度工廠：一律顯示狀態條（不設件數門檻；FR-013）。

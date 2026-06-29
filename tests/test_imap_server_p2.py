@@ -24,7 +24,7 @@ from imap_dataset import (
     master_mailboxes,
 )
 from imap_server import ImapServer
-from imap_sim import DELETED, FLAGGED, SEEN
+from imap_sim import DELETED, FLAGGED, SEEN, message
 from imap_transport import connected_client
 from imaplib_probe import ScriptedIMAP4
 
@@ -151,6 +151,42 @@ def test_move_many_batch_bad_attributes_per_uid_not_dropped(monkeypatch):
     assert all(v is not None for v in out.values())   # 逐封歸因（皆有錯誤訊息），非靜默成功
     inbox = {u for u, _ in server.snapshot()["INBOX"]}
     assert INBOX_NEWSLETTER_UID in inbox and INBOX_CJK_UID in inbox  # 未誤搬、來源留存
+
+
+def test_fallback_no_uidplus_refuses_collateral_whole_expunge(monkeypatch):
+    # SR F5：無 MOVE 又無 UIDPLUS，且來源夾尚有他人 \Deleted → 拒絕整夾 EXPUNGE（大聲失敗、不連坐）。
+    server = _server(supports_move=False, supports_uidplus=False)
+    client = connected_client(monkeypatch, server)
+    with pytest.raises(BackendError):
+        client.move(str(INBOX_NEWSLETTER_UID), "Archive", "INBOX")
+    inbox = {u for u, _ in server.snapshot()["INBOX"]}
+    assert INBOX_USER_DELETED_UID in inbox        # 他人 \Deleted(106) 未被連坐清除
+    assert len(server.mailboxes["Archive"]) == 1  # COPY 已成功（資料未遺失）
+    assert server.command_count("EXPUNGE") == 0   # 絕不執行整夾 EXPUNGE
+
+
+def test_fallback_no_uidplus_whole_expunge_safe_when_alone(monkeypatch):
+    # SR F5：無 UIDPLUS 但來源夾「只有這封」\Deleted → 整夾 EXPUNGE 安全 → 正常移除。
+    server = ImapServer(
+        {"INBOX": [message(101, "x")], "Archive": []},
+        supports_move=False, supports_uidplus=False,
+    )
+    client = connected_client(monkeypatch, server)
+    client.move("101", "Archive", "INBOX")
+    assert 101 not in {m.uid for m in server.mailboxes["INBOX"]}
+    assert len(server.mailboxes["Archive"]) == 1
+    assert server.command_count("EXPUNGE") == 1   # 唯有安全情況才整夾 EXPUNGE
+
+
+def test_ensure_folder_reconnects(monkeypatch):
+    # SR F6：建立目標夾遇連線中斷 → 透明重連續完（與其他 op 一致，不再中止整個分類）。
+    server = _server()
+    server.arm_expiry(before_op="create", nth=1, mode="eof")
+    _no_sleep(monkeypatch)
+    client = connected_client(monkeypatch, server, token_provider=lambda: "tok")
+    client.ensure_folder("NewBox")
+    assert "NewBox" in server.mailboxes
+    assert server.command_count("AUTHENTICATE") >= 2
 
 
 def test_ensure_folder_creates_then_idempotent(monkeypatch):
