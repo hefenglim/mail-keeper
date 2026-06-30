@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.7.0] - 2026-07-01
+### Validated — 大規模全端 E2E 認證（30,000 封 / 3,000 搬移；無產品行為變更）
+本版為里程碑釋出：以 30,000 封信箱、3,000 封搬移的**全端 E2E**（真 `OutlookIMAPClient` + `classifier` + `cli` 跑在線級 IMAP 模擬器引擎上）認證 v0.6.x 累積的韌性／效能成果（features 006/007/008）於大規模、含故障注入下行為正確。**產品程式碼除版本號外未更動**（src/mailkeeper byte-identical 於 0.6.8）。
+- **新增全端 E2E 驗收 `tests/e2e/e2e_bulk_30000.py`（8 場景、64 檢查）**：S1 全量匯出讀取；S2 中途 EOF 透明重連可續傳（每 UID 恰抓一次、非整批重抓）；S3 重連後 UIDVALIDITY 變更（信箱重建、UID 重配）安全重抓；S4 分類＋搬移 3,000（INBOX→Archive）；S5 搬移中途 EOF 透明重連冪等（Archive 恰 3,000、零重複複本）；S6 多目標夾（CJK mUTF-7／含空白／巢狀自動新建）；S7/S8 異常伺服器（drop_uid／fail_fetch）產品大聲失敗、不產生缺 UID／不完整標頭汙染。全程使用者 50 封 `\Deleted` 不被波及。非 CI 測試（檔名無 `test_` 前綴），以 `python tests/e2e/e2e_bulk_30000.py` 執行，trace log 輸出至 `e2e-trace-logs/`（gitignored）。
+### Tests / Tooling — IMAP 模擬器引擎強化（E2E 揪出的指標缺陷修正）
+- **`_render_fetch` 序號渲染 O(n²)→O(n)**：以一次性「物件→序號」對照表取代每封 `list.index()`，30,000 封 `list_headers` 渲染由 ~185s 降為 ~8s；輸出 wire bytes 與逐封 `_seq_of` 完全相同（保真不變，347 套件測試零回歸）。
+- **`redundant_full_folder_reads` 改以「同一 UID 跨多次 FETCH」判定真正冗餘**（新 `redundant_refetches()`），取代舊「FETCH 命令數 > 1」——後者在 feature 008 多批 FETCH 下會把合法分批（讀 >50 封必 >1 道 FETCH）誤報為冗餘，使 CLAUDE.md §7「`redundant_full_folder_reads` 須為空」鐵則對任何大型匯出形同失效。
+- **`redundant_selects()` 加重連感知**：遇 `AUTHENTICATE`（新 session）即重置追蹤，重連後對同夾的**必要**重選不再誤報為可省的冗餘 SELECT。
+- **指標偵測器正向觸發反向證明（SR 條件）**：新增 3 個測試證明 `redundant_refetches()`（整夾重抓 → 非空）與 `redundant_selects()`（同 session 連續重選 → `==1`；重連邊界 → `==0`）**真的會抓到回歸**，而非只測通過值。
+- `doc/imap-simulator-engine-spec.md` 同步上述指標語意校正（REQ-OBS-B2/B3）。350 passed、離線、覆蓋率 100%、mypy 乾淨。
+
 ## [0.6.8] - 2026-06-30
 ### Tests / Tooling — 全套件 100% 行覆蓋（無產品行為變更）
 - **總覆蓋率達 100%**（先前 90.34%）：補齊 seam 以外**有意義的防禦/邏輯分支**——`MailOrganizer.run(dry_run=False)` 真實執行、classifier 不可行列/ReauthRequired 透傳/執行時來源已不存在(TOCTOU)、`config_store` 非整數 port 與非物件 JSON、`csv_io` 寫檔失敗、`console`/`progress` 永不崩潰路徑、`menu` EOF、`buildinfo` 無 build 烙印的回退；cli 的 classify 無候選/互動確認/ReauthRequired 乾淨停止、不可行列報告、互動選單三動作與無效選擇防呆、`main` 子指令分派與互動選單入口。

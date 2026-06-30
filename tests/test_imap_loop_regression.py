@@ -25,7 +25,7 @@ from imap_dataset import (
 )
 from imap_server import ImapServer
 from imap_sim import DELETED, message
-from imap_transport import connected_client
+from imap_transport import SimIMAP4_SSL, connected_client
 
 from mailkeeper import classifier
 from mailkeeper.csv_io import ClassificationRow
@@ -391,3 +391,43 @@ def test_move_many_chunks_at_cap(monkeypatch):
     client = connected_client(monkeypatch, server)
     client.move_many([str(u) for u in range(101, 109)], "Archive", "INBOX")  # 8 封 → ⌈8/3⌉=3 批
     assert server.command_count("UID MOVE") == 3
+
+
+# ── v0.7.0 SR 條件：偵測器「正向觸發」反向證明 ──────────────────────────────────
+# 指標不可只測「通過值」（== {}／== 0）——須證明它真的會抓到回歸（SR 指出舊測試只驗通過路徑）。
+
+def _raw(server: ImapServer):
+    """連上引擎、已認證的真 imaplib 客戶端（驅動產品不會送的原始指令，直接驗引擎指標）。"""
+    m = SimIMAP4_SSL(server)
+    m.authenticate("XOAUTH2", lambda _c: b"user=u\x01auth=Bearer t\x01\x01")
+    return m
+
+
+def test_redundant_refetches_fires_on_whole_folder_refetch(monkeypatch):
+    # 反向證明：真的「整夾標頭重抓」（連兩趟 list_headers 掃同夾）→ redundant_refetches **非空**。
+    # 對照多批不同 UID（test_multibatch_…）恆為 {}：證明指標精準抓「同一 UID 被重複 FETCH」而非命令數。
+    server = fresh_server()  # INBOX 8 封 → 每趟 1 批 FETCH
+    client = connected_client(monkeypatch, server)
+    client.list_headers("INBOX")
+    client.list_headers("INBOX")  # 第二趟整夾重抓（冗餘）
+    rep = server.loop_report()
+    assert rep["fetches_per_folder"] == {"INBOX": 2}            # 2 道 FETCH 命令（命令數）
+    assert rep["redundant_full_folder_reads"] == {"INBOX": 8}   # 8 封各被重抓一次 → 偵測器觸發
+    assert server.redundant_refetches() == {"INBOX": 8}
+
+
+def test_redundant_selects_fires_on_consecutive_same_select():
+    # 反向證明：同一 session 連續 SELECT 同夾同模式 → redundant_selects()==1（可省的重選）。
+    server = fresh_server()
+    m = _raw(server)
+    m.select("INBOX")
+    m.select("INBOX")  # 連續重選同夾 → 浪費
+    assert server.redundant_selects() == 1
+
+
+def test_redundant_selects_reset_across_reconnect_boundary():
+    # 反向證明（重連感知）：兩次 SELECT 同夾之間隔著重連（新連線→新 AUTHENTICATE）→ 必要重選不計（==0）。
+    server = fresh_server()
+    _raw(server).select("INBOX")  # session 1
+    _raw(server).select("INBOX")  # session 2（新連線=重連，期間有 AUTHENTICATE → 追蹤重置）
+    assert server.redundant_selects() == 0
