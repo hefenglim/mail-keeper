@@ -56,6 +56,74 @@ def test_silent_refresh_failure_raises_reauth(monkeypatch):
         auth.get_token_silent(_cfg())
 
 
+# ── auth._username（純 dict 邏輯，離線可測；SR C1：不可 pragma 藏邏輯）─────────
+
+def test_username_prefers_preferred_username():
+    assert auth._username(_FakeApp([], None), {"id_token_claims": {"preferred_username": "a@x.com"}}) == "a@x.com"
+
+
+def test_username_falls_back_to_email_claim():
+    assert auth._username(_FakeApp([], None), {"id_token_claims": {"email": "b@x.com"}}) == "b@x.com"
+
+
+def test_username_falls_back_to_account():
+    assert auth._username(_FakeApp([{"username": "c@x.com"}], None), {}) == "c@x.com"
+
+
+def test_username_empty_when_no_claims_or_accounts():
+    assert auth._username(_FakeApp([], None), {}) == ""
+
+
+# ── auth.get_access_token（離線：靜默成功 / device-flow 防禦守衛；SR C2）────────
+# 真正互動的兩行（印提示 + 阻塞輪詢真實登入）已 pragma；其餘邏輯與兩個 RuntimeError 守衛皆測。
+
+class _FakeDeviceApp:
+    def __init__(self, *, accounts=None, silent=None, flow=None, device_result=None):
+        self._accounts = accounts or []
+        self._silent = silent
+        self._flow = flow if flow is not None else {"user_code": "X", "message": "go", "expires_in": 1}
+        self._device_result = device_result
+
+    def get_accounts(self): return self._accounts
+    def acquire_token_silent(self, scopes, account=None): return self._silent
+    def initiate_device_flow(self, scopes=None): return self._flow
+    def acquire_token_by_device_flow(self, flow): return self._device_result
+
+
+def _patch_device(monkeypatch, app):
+    monkeypatch.setattr(auth, "_load_cache", lambda p: object())
+    monkeypatch.setattr(auth, "_save_cache", lambda c, p: None)
+    monkeypatch.setattr(auth.msal, "PublicClientApplication", lambda *a, **k: app)
+
+
+def test_get_access_token_silent_success(monkeypatch):
+    """已有帳號 + 靜默成功 → 直接回 (token, username)，不走 device flow。"""
+    app = _FakeDeviceApp(accounts=["acct"], silent={"access_token": "tok", "id_token_claims": {"preferred_username": "u@x.com"}})
+    _patch_device(monkeypatch, app)
+    assert auth.get_access_token(_cfg()) == ("tok", "u@x.com")
+
+
+def test_get_access_token_device_flow_not_started_raises(monkeypatch):
+    """initiate_device_flow 無 user_code（啟動失敗）→ RuntimeError（防禦守衛）。"""
+    _patch_device(monkeypatch, _FakeDeviceApp(accounts=[], flow={}))
+    with pytest.raises(RuntimeError):
+        auth.get_access_token(_cfg())
+
+
+def test_get_access_token_device_flow_success(monkeypatch):
+    """device flow 完成、取得 token → 回 (token, username)。"""
+    app = _FakeDeviceApp(accounts=[], device_result={"access_token": "tok2", "id_token_claims": {"email": "d@x.com"}})
+    _patch_device(monkeypatch, app)
+    assert auth.get_access_token(_cfg()) == ("tok2", "d@x.com")
+
+
+def test_get_access_token_no_token_after_device_flow_raises(monkeypatch):
+    """device flow 結束卻無 access_token → RuntimeError（防禦守衛）。"""
+    _patch_device(monkeypatch, _FakeDeviceApp(accounts=[], device_result={"error": "expired"}))
+    with pytest.raises(RuntimeError):
+        auth.get_access_token(_cfg())
+
+
 # ── config.json 韌性設定（缺漏→預設、無效→預設、有效→生效）──────────────────
 
 def _write_cfg(tmp_cwd, extra):

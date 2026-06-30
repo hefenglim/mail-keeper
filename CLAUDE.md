@@ -135,10 +135,13 @@ was retired in P3; `tests/imap_sim.py` now holds only shared wire helpers + the 
   bottleneck analysis), `server.assert_all_fetches_request_uid()` (pins the 0.5.x UID regression class), and the
   before/after `snapshot()`. See `tests/test_imap_loop_regression.py`. The log is also the efficiency oracle —
   it surfaces wasted work (e.g. re-`SELECT`ing an already-selected folder per move) for optimization.
-- Keep `imap_client.py` coverage at **100%** (CI gate, `.github/workflows/ci.yml`; total ≥ 88%). Every executable
-  path in the seam is exercised — via the engine, or (for structurally-unreachable defensive guards like the
-  `ReauthRequired` re-raises) via domain-level exception injection. Never fabricate an imaplib wire reply to
-  hit a line; if a real branch needs a new server behavior, extend the engine first (with a fidelity case).
+- Keep coverage at **100%** — both `imap_client.py` and the total (CI gates, `.github/workflows/ci.yml`).
+  Seam paths are exercised via the engine; other defensive/logic branches via unit tests; structurally-unreachable
+  guards (e.g. the `ReauthRequired` re-raises) via domain-level exception injection. Never fabricate an imaplib
+  wire reply to hit a line; if a real branch needs a new server behavior, extend the engine first (with a fidelity
+  case). What genuinely can't/shouldn't be offline-tested — `auth.py` MSAL/device-flow, pure `input`/stderr
+  wrappers, the `python -m` entry shim — is marked honestly with `# pragma: no cover` / `[tool.coverage.run] omit`
+  (not left as silent gaps); auth is verified by `doc/release-smoke.md` against a real account.
 - Run `doc/release-smoke.md` (real account) before every release — the only check that hits a real server.
 
 ## 8. Repo etiquette

@@ -31,7 +31,9 @@ jobs:
         run: python -m mypy src/mailkeeper
 
       - name: Tests + coverage (offline)
-        run: python -m pytest --cov=mailkeeper --cov-report=term-missing --cov-fail-under=88
+        # 全套件 100% 行覆蓋：seam 經引擎觸發；其餘防禦/邏輯分支以單元測試覆蓋；純 I/O 包裝、
+        # auth/MSAL、入口 shim 以 `# pragma: no cover` / coverage omit 誠實標記（見 pyproject）。
+        run: python -m pytest --cov=mailkeeper --cov-report=term-missing --cov-fail-under=100
 
       # 對「唯一接真實協定、最高風險」的後端模組單獨設門檻：已達全行覆蓋（每條可執行路徑皆經
       # 線級引擎或領域層例外注入觸發），釘死在 100% 以防任何盲區回歸。

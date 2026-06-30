@@ -14,7 +14,7 @@ from .config_store import Configuration
 from .domain import ReauthRequired
 
 
-def _load_cache(path: str) -> msal.SerializableTokenCache:
+def _load_cache(path: str) -> msal.SerializableTokenCache:  # pragma: no cover - MSAL/磁碟 I/O，由 release-smoke 實帳號驗證
     cache = msal.SerializableTokenCache()
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -22,7 +22,7 @@ def _load_cache(path: str) -> msal.SerializableTokenCache:
     return cache
 
 
-def _save_cache(cache: msal.SerializableTokenCache, path: str) -> None:
+def _save_cache(cache: msal.SerializableTokenCache, path: str) -> None:  # pragma: no cover - MSAL/磁碟 I/O
     if cache.has_state_changed:
         with open(path, "w", encoding="utf-8") as f:
             f.write(cache.serialize())
@@ -86,8 +86,8 @@ def get_access_token(cfg: Configuration) -> tuple[str, str]:
     # 提示使用者開啟網址、輸入代碼完成登入。
     # 防卡死：device flow 至多等待到代碼有效期 (flow["expires_in"]) 結束即停止，
     # 不會無限卡住；上方的 silent refresh 路徑完全不受此影響。
-    print(flow["message"])
-    result = app.acquire_token_by_device_flow(flow)
+    print(flow["message"])  # pragma: no cover - 互動：印出 device-flow 登入提示
+    result = app.acquire_token_by_device_flow(flow)  # pragma: no cover - 互動：阻塞輪詢真實登入完成
 
     if "access_token" not in result:
         raise RuntimeError(
