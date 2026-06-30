@@ -28,7 +28,7 @@ def _save_cache(cache: msal.SerializableTokenCache, path: str) -> None:  # pragm
             f.write(cache.serialize())
 
 
-def _username(app: msal.PublicClientApplication, result: dict) -> str:  # pragma: no cover - MSAL 認證結果解析
+def _username(app: msal.PublicClientApplication, result: dict) -> str:
     """從認證結果 / 快取帳號取出已認證的 email / 帳號名。"""
     claims = result.get("id_token_claims") or {}
     name = claims.get("preferred_username") or claims.get("email")
@@ -57,7 +57,7 @@ def get_token_silent(cfg: Configuration) -> str:
     raise ReauthRequired("需重新登入：無法以既有授權靜默續期，請重新執行以登入。")
 
 
-def get_access_token(cfg: Configuration) -> tuple[str, str]:  # pragma: no cover - MSAL device-flow 互動登入，由 release-smoke 實帳號驗證
+def get_access_token(cfg: Configuration) -> tuple[str, str]:
     """取得 (access token, 已認證帳號 email)。
 
     優先用快取的 refresh token 靜默更新，必要時才走 device code 互動登入。
@@ -86,8 +86,8 @@ def get_access_token(cfg: Configuration) -> tuple[str, str]:  # pragma: no cover
     # 提示使用者開啟網址、輸入代碼完成登入。
     # 防卡死：device flow 至多等待到代碼有效期 (flow["expires_in"]) 結束即停止，
     # 不會無限卡住；上方的 silent refresh 路徑完全不受此影響。
-    print(flow["message"])
-    result = app.acquire_token_by_device_flow(flow)
+    print(flow["message"])  # pragma: no cover - 互動：印出 device-flow 登入提示
+    result = app.acquire_token_by_device_flow(flow)  # pragma: no cover - 互動：阻塞輪詢真實登入完成
 
     if "access_token" not in result:
         raise RuntimeError(
