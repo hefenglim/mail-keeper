@@ -110,6 +110,7 @@ class ImapServer:
         greeting_mode: str = "ok",
         supports_condstore: bool = False,
         malformed_fold: bool = False,
+        send_uidvalidity: bool = True,
     ) -> None:
         self.mailboxes: dict[str, list[SimMessage]] = {
             k: list(v) for k, v in (mailboxes or {"INBOX": []}).items()
@@ -125,6 +126,8 @@ class ImapServer:
         self._supports_condstore = supports_condstore  # P11：CONDSTORE（SELECT 報 HIGHESTMODSEQ、FETCH 可索取 MODSEQ）
         self._highest_modseq = 1                       # P11：CONDSTORE 模擬用
         self._malformed_fold = malformed_fold          # 確定性異常注入：表頭不合規折行（值落續行）
+        self._send_uidvalidity = send_uidvalidity      # E3：SELECT/EXAMINE 是否送 [UIDVALIDITY]（False → 罕見伺服器省略）
+        self._list_raw: Optional[list[str]] = None     # E2：覆寫 LIST 回應的原始 untagged 內容（畸形 mUTF-7 / 零行）
         self._uidnext: dict[str, int] = {
             name: (max((m.uid for m in msgs), default=0) + 1)
             for name, msgs in self.mailboxes.items()
@@ -594,9 +597,10 @@ class ImapServer:
             self._untagged(f"FLAGS ({flags})")
             + self._untagged(f"{len(msgs)} EXISTS")
             + self._untagged("0 RECENT")
-            + self._untagged(f"OK [UIDVALIDITY {self._uidvalidity.get(name, 1)}] UIDs valid")
-            + self._untagged(f"OK [UIDNEXT {self._uidnext.get(name, 1)}] Predicted next UID")
         )
+        if self._send_uidvalidity:  # E3：False → 省略 [UIDVALIDITY]（罕見伺服器；驅動產品 _current_uidvalidity 回 None）
+            body += self._untagged(f"OK [UIDVALIDITY {self._uidvalidity.get(name, 1)}] UIDs valid")
+        body += self._untagged(f"OK [UIDNEXT {self._uidnext.get(name, 1)}] Predicted next UID")
         if self._supports_condstore:  # P11：CONDSTORE → 報告 HIGHESTMODSEQ
             body += self._untagged(f"OK [HIGHESTMODSEQ {self._highest_modseq}] Highest")
         body += self._tagged(tag, "OK", f"[{code}] {verb} completed")
@@ -628,12 +632,26 @@ class ImapServer:
 
     # ---------- handlers：LIST ----------
     def _cmd_list(self, tag: bytes, rest: bytes) -> bytes:
-        lines = b"".join(
-            self._untagged(f'LIST (\\HasNoChildren) "{self._sep}" "{_encode_mutf7(name)}"')
-            for name in self.mailboxes
-        )
-        self._record(tag, "LIST", ('""', "*"), None, tuple(self.mailboxes), "OK", None)
+        if self._list_raw is not None:
+            # E2：覆寫原始 untagged 內容——測畸形 mUTF-7 夾名與「零 LIST 行」（imaplib data=[None]）等罕見回應。
+            lines = b"".join(self._untagged(s) for s in self._list_raw)
+            names: tuple = tuple(self._list_raw)
+        else:
+            lines = b"".join(
+                self._untagged(f'LIST (\\HasNoChildren) "{self._sep}" "{_encode_mutf7(name)}"')
+                for name in self.mailboxes
+            )
+            names = tuple(self.mailboxes)
+        self._record(tag, "LIST", ('""', "*"), None, names, "OK", None)
         return lines + self._tagged(tag, "OK", "LIST completed")
+
+    def set_list_lines(self, lines: "Optional[list[str]]") -> None:
+        """E2：覆寫下一次（起）``LIST`` 回應的原始 untagged payload（每元素為一條，不含 ``* ``/CRLF）。
+
+        ``[]`` → 不送任何 ``* LIST`` 行（真 imaplib `list()` 回 ``data=[None]``，驅動產品略過空行）；
+        ``None`` → 還原為依 ``self.mailboxes`` 正常列舉。供測試畸形 mUTF-7 夾名與零行回應。
+        """
+        self._list_raw = list(lines) if lines is not None else None
 
     # ---------- handlers：LSUB / NAMESPACE / STATUS（P11）----------
     def _cmd_lsub(self, tag: bytes, rest: bytes) -> bytes:

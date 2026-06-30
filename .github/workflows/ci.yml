@@ -31,8 +31,9 @@ jobs:
         run: python -m mypy src/mailkeeper
 
       - name: Tests + coverage (offline)
-        run: python -m pytest --cov=mailkeeper --cov-report=term-missing --cov-fail-under=85
+        run: python -m pytest --cov=mailkeeper --cov-report=term-missing --cov-fail-under=88
 
-      # 對「唯一接真實協定、最高風險」的後端模組單獨設較高門檻，守住盲區。
+      # 對「唯一接真實協定、最高風險」的後端模組單獨設門檻：已達全行覆蓋（每條可執行路徑皆經
+      # 線級引擎或領域層例外注入觸發），釘死在 100% 以防任何盲區回歸。
       - name: Coverage gate — imap_client (the protocol seam)
-        run: python -m coverage report --include="*/imap_client.py" --fail-under=88
+        run: python -m coverage report --include="*/imap_client.py" --fail-under=100

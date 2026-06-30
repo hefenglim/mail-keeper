@@ -242,6 +242,26 @@ GitHub CI 的多版本矩陣（3.10 + 3.13）揭露一個**版本依賴的折行
   空白），3.12 則無。測試以內容比對（容忍前導空白）斷言「內容還原、未崩潰」，**刻意不**斷言前導空白
   有無。正解屬**產品強化**（`_unfold`/`_decode` 去前導折疊空白），記於 backlog；本模擬器分支不動產品碼。
 
+### 7.4 全行覆蓋驅動的引擎擴充（v0.6.7，imap_client 100%）
+
+為把 seam（`imap_client.py`）推到 **100% 行覆蓋**，補上 happy-path 碰不到的罕見/防禦分支所需的引擎能力
+（皆**先加保真案例**，再寫產品測試，遵 §5 鐵則 2 / §8）：
+
+- ✅ **母版罕見夾名**：新增「字面 `&`」(`R&D`，mUTF-7 以 `&-` 轉義) 與「ASCII+CJK 混合」(`VIP客戶`) 夾名，
+  驅動 `_decode_mutf7`/`_encode_mutf7` 對 `&` 與「編碼段前後 ASCII 字元」的逐字分支。
+- ✅ **原始 LIST 行覆寫**：`ImapServer.set_list_lines(lines)` 覆寫 `LIST` 的 untagged payload——可注入畸形
+  mUTF-7 夾名（`&` 無收尾、`&...-` 內解出奇數位元組使 utf-16-be 失敗）測產品容錯；`[]` → 不送任何
+  `* LIST` 行（真 imaplib `list()` 回 `data=[None]`），驅動產品略過空項。保真：覆寫內容經真 imaplib `list()` 正確解析。
+- ✅ **SELECT 省略 UIDVALIDITY**：建構參數 `send_uidvalidity=False` → SELECT/EXAMINE 不送 `[UIDVALIDITY]`
+  （罕見伺服器），驅動 `_current_uidvalidity` 回 `None`。保真：真 imaplib `select` 後 `untagged_responses` 無 `UIDVALIDITY`。
+- ✅ **無 Message-ID 郵件**：`imap_sim.message(message_id=None)` 建不帶 Message-ID 的郵件，驅動後備搬移
+  去重退化（`_message_id`→None、`_dest_has_copy`→False）。
+- **誠實標注（結構性無法經引擎觸發者）**：少數 `except ReauthRequired: raise` 守衛、`_conn` 未連線、
+  `_is_session_lost` 末路、`_decode_chunk` 末路回退——`ReauthRequired` 僅由 token_provider 於**重連時**產生，
+  被包的 op 本體正常呼叫永不丟它；引擎再怎麼注入也走不到（硬塞＝偽造程式未請求的回應，§5 紅旗）。這些
+  以**領域層例外注入**的針對性單元測試覆蓋（傳會 raise 的 callable／monkeypatch 高階方法），**不**偽造任何
+  imaplib wire reply。CI 對 `imap_client.py` 的覆蓋率閘門因此釘死 **100%**。
+
 ---
 
 ## 8. 開發規範（Mandate — 與 CLAUDE.md §7 對齊）

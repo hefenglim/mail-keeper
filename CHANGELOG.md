@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.7] - 2026-06-30
+### Tests / Tooling — imap_client 全行覆蓋 + IMAP 模擬器引擎強化（無產品行為變更）
+- **`imap_client.py` 達 100% 行覆蓋**（先前 92%）：補齊 happy-path 碰不到的罕見/防禦分支——modified-UTF-7 夾名編解碼（字面 `&`、ASCII+CJK 混合、畸形無收尾/非法 base64）、空 LIST 回應、`SEARCH` 非 OK、SELECT 省略 `UIDVALIDITY`、後備搬移冪等快路徑/無 `Message-ID`/MESSAGE-ID FETCH 失敗/逐封中斷重連、`on_status` 回呼拋例外被吞。
+- **IMAP 模擬器引擎擴充（皆附保真案例，先擴引擎再寫產品測試，遵 CLAUDE.md §7）**：母版新增「字面 `&`」(`R&D`) 與「ASCII+CJK 混合」(`VIP客戶`) 夾名；`ImapServer.set_list_lines()` 可覆寫 `LIST` 原始 untagged 內容（畸形 mUTF-7／零行 → 真 imaplib 回 `data=[None]`）；建構參數 `send_uidvalidity=False` 可令 SELECT/EXAMINE 省略 `[UIDVALIDITY]`；`imap_sim.message(message_id=None)` 可建無 Message-ID 郵件。
+- **跨 seam 一律經引擎觸發**（真 imaplib over `ImapServer`，雙層驗證 log+snapshot）；少數結構性防禦守衛（`ReauthRequired` 重拋、`_conn` 未連線、`_is_session_lost` 末路、`_decode_chunk` 回退）以**領域層例外注入**的針對性單元測試覆蓋，不偽造任何 imaplib wire reply。
+- **CI 覆蓋率閘門上調**：`imap_client.py` 88% → **100%**（釘死最高風險 seam 的盲區）；總門檻 85% → **88%**（總覆蓋率 90.34%）。
+- 310 passed、離線、mypy 乾淨。產品程式碼除版本號外未更動。
+
 ## [0.6.6] - 2026-06-30
 ### Fixed / Changed — 深度 Senior Review 後續強化（F4–F10）
 - **F4 CSV 公式注入**：`write_worksheet`/`write_folders` 對以 `= + - @`（或 tab/CR）開頭的儲存格前綴 `'`（`_csv_safe`），避免 Excel/試算表把惡意主旨（如 `=HYPERLINK(...)`）當公式執行。

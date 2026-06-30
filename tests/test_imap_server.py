@@ -58,7 +58,7 @@ def test_real_client_decodes_cjk_emoji_quoted_and_empty(monkeypatch):
 
 def test_real_client_lists_folders_over_engine(monkeypatch):
     folders = connected_client(monkeypatch, _server()).list_folders()
-    assert set(folders) == {"INBOX", "Sent", "Archive", "Work/Projects", "台北"}  # CJK/巢狀經 mUTF-7
+    assert set(folders) == {"INBOX", "Sent", "Archive", "Work/Projects", "台北", "R&D", "VIP客戶"}  # CJK/巢狀/字面&/混合經 mUTF-7
 
 
 def test_list_headers_raises_if_server_drops_uid(monkeypatch):

@@ -47,7 +47,7 @@ def test_full_simulation_regression_loop(monkeypatch):
     client = connected_client(monkeypatch, server, token_provider=lambda: "tok")
 
     # 1) 列夾（含 CJK/巢狀，經 mUTF-7）
-    assert set(client.list_folders()) == {"INBOX", "Sent", "Archive", "Work/Projects", "台北"}
+    assert set(client.list_folders()) == {"INBOX", "Sent", "Archive", "Work/Projects", "台北", "R&D", "VIP客戶"}
 
     # 2) 多列分類（共用 cache、含不同目標夾）
     cache = classifier.ClassifyCache()

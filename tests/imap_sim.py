@@ -38,6 +38,9 @@ class SimMessage:
     raw: Optional[bytes] = None
 
 
+_DEFAULT_MID = object()  # sentinel：未指定 → 用穩定預設 Message-ID；明確 None → 該封無 Message-ID
+
+
 def message(
     uid: int,
     subject: str = "",
@@ -46,13 +49,19 @@ def message(
     date: str = "",
     *,
     flags: Optional[set[str]] = None,
+    message_id: object = _DEFAULT_MID,
 ) -> SimMessage:
-    """建構一封模擬郵件的便捷函式（header-only：只帶 HEADER.FIELDS 可取的表頭）。"""
+    """建構一封模擬郵件的便捷函式（header-only：只帶 HEADER.FIELDS 可取的表頭）。
+
+    ``message_id=None`` → 該封**不帶 Message-ID**（罕見但合法的真實郵件；驅動後備搬移在無
+    Message-ID 時的去重退化路徑 ``_message_id``/``_dest_has_copy``）。未指定則用穩定預設值。
+    """
+    mid = f"<msg-{uid}@mailkeeper.test>" if message_id is _DEFAULT_MID else (message_id or "")
     return SimMessage(
         uid,
         {
             "SUBJECT": subject, "FROM": sender, "TO": to, "DATE": date,
-            "MESSAGE-ID": f"<msg-{uid}@mailkeeper.test>",  # 穩定唯一識別（後備搬移冪等以此去重）
+            "MESSAGE-ID": mid,  # 穩定唯一識別（後備搬移冪等以此去重）；"" → 渲染時略過（無此表頭）
         },
         set(flags or set()),
     )

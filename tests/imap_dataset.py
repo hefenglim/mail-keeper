@@ -49,6 +49,12 @@ def master_mailboxes() -> dict[str, list[SimMessage]]:
         "台北": [  # CJK 夾名（modified-UTF-7 保真）
             message(401, "在地通知", "local@x.com", "me@outlook.my", "Thu"),
         ],
+        "R&D": [  # 含字面 '&' 的夾名（mUTF-7 以 '&-' 轉義；驅動 _decode_mutf7/_encode_mutf7 的 '&' 分支）
+            message(501, "R&D 月報", "rd@x.com", "me@outlook.my", "Fri"),
+        ],
+        "VIP客戶": [  # ASCII+CJK 混合夾名（驅動 _decode_mutf7 對 '&...-' 編碼段前後 ASCII 字元的逐字處理）
+            message(601, "VIP 通知", "vip@x.com", "me@outlook.my", "Sat"),
+        ],
     }
 
 
