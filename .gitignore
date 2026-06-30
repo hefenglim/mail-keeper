@@ -21,6 +21,9 @@ dist/
 .pytest_cache/
 *.tmp
 
+# 全端 E2E 產生的 trace log（由 tests/e2e/e2e_bulk_30000.py 重新產生，不提交）
+e2e-trace-logs/
+
 # 測試 / 覆蓋率 / 突變測試產物
 .coverage
 .coverage.*

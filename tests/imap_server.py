@@ -894,9 +894,12 @@ class ImapServer:
         elif rfc_m:
             literal_spec = (rfc_m.start(), "RFC822", self._raw_of)
 
+        # 效能：一次建立「物件→序號」對照表，避免對每封 msg 都 list.index()（O(n)）——
+        # 大量信箱（如 3 萬封）渲染由 O(n²) 降為 O(n)，輸出 wire bytes 與逐封 _seq_of 完全相同。
+        seq_by_id = {id(m): i + 1 for i, m in enumerate(self._sel_msgs())}
         out = b""
         for m in msgs:
-            seq = self._seq_of(m)
+            seq = seq_by_id[id(m)]
             before: list[str] = []
             after: list[str] = []
             lit_pos = literal_spec[0] if literal_spec else None
@@ -1152,11 +1155,34 @@ class ImapServer:
         ]
         assert not bad, f"發現未索取 UID 的 FETCH（會導致 uid 全空）：{bad}"
 
+    def redundant_refetches(self) -> dict[str, int]:
+        """各來源夾「**同一 UID 被重複 FETCH**」的次數——真正的冗餘整夾重抓偵測。
+
+        多批 FETCH（feature 008：⌈N/批⌉ 道命令、每批抓**不同** UID）**不算**冗餘；只有同一 UID 跨
+        多次 FETCH 出現（中斷後整批重抓、或兩趟各自掃整夾）才計入。回傳空 dict = 「零冗餘重抓」。
+        以 UID 去重取代舊版「FETCH 命令數 > 1」的判定——後者在多批讀取下會把合法分批誤報為冗餘
+        （讀 >50 封必 >1 道 FETCH），使 [[no-redundant-refetch]] 鐵則對任何大型匯出形同失效。
+        """
+        seen: dict[str, set] = {}
+        dup: dict[str, int] = {}
+        for op in self.log:
+            if op.command != "UID FETCH":
+                continue
+            mb = op.mailbox or "?"
+            s = seen.setdefault(mb, set())
+            for u in op.affected_uids:
+                if u in s:
+                    dup[mb] = dup.get(mb, 0) + 1
+                else:
+                    s.add(u)
+        return dup
+
     def loop_report(self) -> dict:
         """彙整一次操作的 loop-regression / 效能分析數據（大量郵件迴圈回歸的單一檢驗面）。
 
-        關鍵欄位 ``redundant_full_folder_reads`` 非空 = 同一來源夾整夾標頭被重抓（冗餘下載、
-        效能回歸——對照 [[no-redundant-refetch]] 鐵則）。其餘供往返/位元組/各命令次數的瓶頸分析。
+        關鍵欄位 ``redundant_full_folder_reads`` 非空 = 同一來源夾**同一 UID 標頭被重複抓取**（冗餘
+        下載、效能回歸——對照 [[no-redundant-refetch]] 鐵則）。``fetches_per_folder`` 為各夾 FETCH
+        命令數（多批讀取下 = ⌈N/批⌉，供往返瓶頸分析，非冗餘判據）。其餘供位元組/命令次數分析。
         """
         counts: dict[str, int] = {}
         fetches: dict[str, int] = {}
@@ -1174,7 +1200,7 @@ class ImapServer:
             "bytes_out": sum(len(b) for b in self.wire_out),
             "command_counts": counts,
             "fetches_per_folder": fetches,
-            "redundant_full_folder_reads": {mb: n for mb, n in fetches.items() if n > 1},
+            "redundant_full_folder_reads": self.redundant_refetches(),
             "redundant_selects": self.redundant_selects(),
             "authentications": counts.get("AUTHENTICATE", 0),
             "reconnects": max(0, counts.get("AUTHENTICATE", 0) - 1),  # 首次 + 每次重連各一認證
@@ -1190,11 +1216,16 @@ class ImapServer:
 
         例：分類迴圈中產品對每封 move 前都重 SELECT 來源夾，雖正確但每次都選同一已選夾 →
         本計數即點出這類可優化的重複（每來源夾批次只需 SELECT 一次）。
+
+        **重連感知**：遇到 ``AUTHENTICATE``（新 session）即重置追蹤——重連後 session 的選取狀態
+        已失效，再次 SELECT 同夾是**必要**的（非可省），不計入浪費；否則重連場景會把必要重選誤報。
         """
         cur: Optional[tuple] = None  # (mailbox, response_code) —— 兼顧讀寫模式：模式切換的重選不算浪費
         waste = 0
         for op in self.log:
-            if op.command in ("SELECT", "EXAMINE"):
+            if op.command == "AUTHENTICATE":
+                cur = None  # 新 session：選取狀態歸零，後續首次 SELECT 為必要而非冗餘
+            elif op.command in ("SELECT", "EXAMINE"):
                 key = (op.mailbox, op.response_code)
                 if key == cur:
                     waste += 1
@@ -1211,15 +1242,7 @@ class ImapServer:
             "most_frequent_command": top[0],
             "most_frequent_count": top[1],
             "redundant_selects": self.redundant_selects(),
-            "redundant_full_folder_reads": {
-                mb: n
-                for mb, n in (
-                    (op.mailbox, sum(1 for o in self.log if o.command == "UID FETCH" and o.mailbox == op.mailbox))
-                    for op in self.log
-                    if op.command == "UID FETCH"
-                )
-                if n > 1
-            },
+            "redundant_full_folder_reads": self.redundant_refetches(),  # 以 UID 去重判定真正冗餘（多批不誤報）
         }
 
     def assert_sequence(self, expected: list, *, subsequence: bool = True) -> None:

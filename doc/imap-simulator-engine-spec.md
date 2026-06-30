@@ -98,8 +98,10 @@ abort/error 包裝，覆蓋產品 `_is_session_lost` 的全部真實入口。
 | ID | 需求 | 實現符號 / 狀態 |
 |---|---|---|
 | **REQ-OBS-B1（序列與行為驗證）** | 比對產品行為軌跡是否符合預期（如注入認證失敗後「重試且 N 次後放棄並記錄」，而非無窮迴圈）。 | ✅ `assert_sequence(expected, subsequence=True)`（命令/結果碼/response code 序列對齊）+ `loop_report`/`roundtrips` 素材 |
-| **REQ-OBS-B2（效能瓶頸審查）** | 檢測重複連線（connection churning）、頻發小指令未批次、延遲升高時 timeout/retry 是否得當。 | ✅ `bottleneck()` / `redundant_selects()` / `redundant_full_folder_reads` / `loop_report()`（往返、各命令次數、bytes、每夾 FETCH） |
-| **REQ-OBS-B3（請求不變量）** | 釘死高風險回歸類。 | ✅ `assert_all_fetches_request_uid()`（0.5.x「FETCH 未索取 UID → uid 全空」致命回歸）、`fetch_count()`（同夾 >1 = 冗餘重抓） |
+| **REQ-OBS-B2（效能瓶頸審查）** | 檢測重複連線（connection churning）、頻發小指令未批次、延遲升高時 timeout/retry 是否得當。 | ✅ `bottleneck()` / `redundant_selects()` / `redundant_refetches()` / `loop_report()`（往返、各命令次數、bytes、每夾 FETCH） |
+| **REQ-OBS-B3（請求不變量）** | 釘死高風險回歸類。 | ✅ `assert_all_fetches_request_uid()`（0.5.x「FETCH 未索取 UID → uid 全空」致命回歸）、`redundant_refetches()`（**同一 UID 跨多次 FETCH** = 冗餘重抓） |
+
+> **指標語意（v0.7.0 校正）**：`redundant_full_folder_reads`（= `redundant_refetches()`）以「**同一 UID 被重複 FETCH**」判定冗餘，而非「FETCH 命令數 > 1」——feature 008 多批 FETCH（讀 N 封 = ⌈N/批⌉ 道命令、每批抓不同 UID）為合法、不計入；`fetches_per_folder` 仍是各夾 FETCH 命令數（供往返瓶頸分析，非冗餘判據）。`redundant_selects()` 亦具**重連感知**：遇 `AUTHENTICATE`（新 session）即重置追蹤，重連後對同夾的必要重選不計為浪費。二者皆於 30,000 封 / 3,000 搬移全端 E2E（`tests/e2e/e2e_bulk_30000.py`）校正、釘死。
 
 > **鐵則（CLAUDE.md §7）**：任何 bulk-mail / loop 行為（大量 classify/export、重連中迴圈）都**必須**跑在引擎上，
 > 並以其 log 分析驗證：`loop_report()` 的 `redundant_full_folder_reads` 須為空、
