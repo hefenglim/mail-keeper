@@ -12,8 +12,6 @@
 """
 from __future__ import annotations
 
-import imaplib
-
 import pytest
 
 from imap_dataset import fresh_server
@@ -154,6 +152,19 @@ def test_fallback_move_idempotent_when_uid_already_gone(monkeypatch):
     assert len(server.mailboxes["Archive"]) == arch_after_first == 1   # 仍只有一份
     assert "101" not in {str(m.uid) for m in server.mailboxes["INBOX"]}
     assert server.command_count("UID COPY") == 1     # 第二次未再 COPY（冪等）
+
+
+def test_engine_message_without_message_id_over_real_imaplib():
+    """E4 保真：message(message_id=None) 的 FETCH 表頭確實不含 Message-ID（vs 一般郵件有），
+    經真 imaplib 解析確認——與 set_list_lines/send_uidvalidity 保真案例同模式。"""
+    server = ImapServer({"INBOX": [message(10, "no mid", message_id=None), message(11, "normal")]})
+    m = _imap_over(server)
+    m.select("INBOX", readonly=True)
+    typ, data = m.uid("fetch", "10,11", "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
+    assert typ == "OK"
+    tuples = [d for d in data if isinstance(d, tuple)]
+    assert b"Message-ID" not in tuples[0][1]   # uid 10：無 Message-ID（空表頭）
+    assert b"Message-ID" in tuples[1][1]        # uid 11：有 Message-ID
 
 
 def test_fallback_move_without_message_id(monkeypatch):
