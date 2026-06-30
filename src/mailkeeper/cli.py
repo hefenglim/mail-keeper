@@ -17,7 +17,7 @@ from .organizer import MailBackend, MailOrganizer, Rule, from_contains, subject_
 _net_reporter = functools.partial(progress.reporter, network=True)
 
 
-def _emit_status(msg: str) -> None:
+def _emit_status(msg: str) -> None:  # pragma: no cover - 純 stderr I/O 包裝（重連狀態提示）
     """後端重連/續期/重試時的狀態提示 → 編碼安全 stderr（不污染 stdout 資料輸出）。"""
     console.safe_print(msg, file=sys.stderr)
 
@@ -97,7 +97,7 @@ def verify_account(
     raise config_store.ConfigError("使用者選擇中止：請修正設定後重試。")
 
 
-def _prompt_choice() -> str:
+def _prompt_choice() -> str:  # pragma: no cover - 純 stdin input 包裝
     return input("請輸入選項編號 [1-4]：").strip()
 
 
@@ -187,7 +187,7 @@ def _print_report(items: list[classifier.ReportItem], to_create: list[str]) -> N
         )
 
 
-def _prompt_yes_no() -> bool:
+def _prompt_yes_no() -> bool:  # pragma: no cover - 純 stdin input 包裝
     return input("確認執行搬移？(y/N)：").strip().lower() in ("y", "yes")
 
 
@@ -347,5 +347,5 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(1)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - 腳本入口
     main()

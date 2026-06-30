@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mailkeeper"
-version = "0.6.7"
+version = "0.6.8"
 description = "替你看管收件匣 —— 登入 Outlook.com IMAP，讀取郵件標題並依規則自動整理"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,6 +33,10 @@ mailkeeper = "mailkeeper.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.coverage.run]
+# `python -m mailkeeper` 入口 shim（never-imported），測試直接呼叫 cli.main；以 release-smoke 實際執行驗證。
+omit = ["*/__main__.py"]
 
 [tool.mutmut]
 paths_to_mutate = "src/mailkeeper/"

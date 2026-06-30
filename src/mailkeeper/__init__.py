@@ -1,7 +1,7 @@
 """MailKeeper —— 替你看管收件匣的 Outlook.com IMAP 郵件整理工具。"""
 from __future__ import annotations
 
-__version__ = "0.6.7"
+__version__ = "0.6.8"
 
 from .domain import MailHeader
 from .imap_client import OutlookIMAPClient

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.8] - 2026-06-30
+### Tests / Tooling — 全套件 100% 行覆蓋（無產品行為變更）
+- **總覆蓋率達 100%**（先前 90.34%）：補齊 seam 以外**有意義的防禦/邏輯分支**——`MailOrganizer.run(dry_run=False)` 真實執行、classifier 不可行列/ReauthRequired 透傳/執行時來源已不存在(TOCTOU)、`config_store` 非整數 port 與非物件 JSON、`csv_io` 寫檔失敗、`console`/`progress` 永不崩潰路徑、`menu` EOF、`buildinfo` 無 build 烙印的回退；cli 的 classify 無候選/互動確認/ReauthRequired 乾淨停止、不可行列報告、互動選單三動作與無效選擇防呆、`main` 子指令分派與互動選單入口。
+- **誠實標記不測者**：`auth.py` 的 MSAL/磁碟 I/O 函式（device-flow 互動登入，由 `doc/release-smoke.md` 實帳號驗證）、cli 純 `input`/stderr 包裝（`_emit_status`/`_prompt_choice`/`_prompt_yes_no`）、腳本入口以 `# pragma: no cover` 標記；`__main__.py`（`python -m` 入口 shim）以 `pyproject` 的 `[tool.coverage.run] omit` 排除。
+- **CI 總覆蓋率閘門 88% → 100%**（imap_client 維持 100%）。339 passed、離線、mypy 乾淨。產品程式碼除版本號與 `# pragma` 註解外未更動。
+
 ## [0.6.7] - 2026-06-30
 ### Tests / Tooling — imap_client 全行覆蓋 + IMAP 模擬器引擎強化（無產品行為變更）
 - **`imap_client.py` 達 100% 行覆蓋**（先前 92%）：補齊 happy-path 碰不到的罕見/防禦分支——modified-UTF-7 夾名編解碼（字面 `&`、ASCII+CJK 混合、畸形無收尾/非法 base64）、空 LIST 回應、`SEARCH` 非 OK、SELECT 省略 `UIDVALIDITY`、後備搬移冪等快路徑/無 `Message-ID`/MESSAGE-ID FETCH 失敗/逐封中斷重連、`on_status` 回呼拋例外被吞。

@@ -14,7 +14,7 @@ from .config_store import Configuration
 from .domain import ReauthRequired
 
 
-def _load_cache(path: str) -> msal.SerializableTokenCache:
+def _load_cache(path: str) -> msal.SerializableTokenCache:  # pragma: no cover - MSAL/磁碟 I/O，由 release-smoke 實帳號驗證
     cache = msal.SerializableTokenCache()
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -22,13 +22,13 @@ def _load_cache(path: str) -> msal.SerializableTokenCache:
     return cache
 
 
-def _save_cache(cache: msal.SerializableTokenCache, path: str) -> None:
+def _save_cache(cache: msal.SerializableTokenCache, path: str) -> None:  # pragma: no cover - MSAL/磁碟 I/O
     if cache.has_state_changed:
         with open(path, "w", encoding="utf-8") as f:
             f.write(cache.serialize())
 
 
-def _username(app: msal.PublicClientApplication, result: dict) -> str:
+def _username(app: msal.PublicClientApplication, result: dict) -> str:  # pragma: no cover - MSAL 認證結果解析
     """從認證結果 / 快取帳號取出已認證的 email / 帳號名。"""
     claims = result.get("id_token_claims") or {}
     name = claims.get("preferred_username") or claims.get("email")
@@ -57,7 +57,7 @@ def get_token_silent(cfg: Configuration) -> str:
     raise ReauthRequired("需重新登入：無法以既有授權靜默續期，請重新執行以登入。")
 
 
-def get_access_token(cfg: Configuration) -> tuple[str, str]:
+def get_access_token(cfg: Configuration) -> tuple[str, str]:  # pragma: no cover - MSAL device-flow 互動登入，由 release-smoke 實帳號驗證
     """取得 (access token, 已認證帳號 email)。
 
     優先用快取的 refresh token 靜默更新，必要時才走 device code 互動登入。
