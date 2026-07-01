@@ -1,0 +1,26 @@
+{
+  "authentications": 1,
+  "bytes_in": 446,
+  "bytes_out": 1075,
+  "command_counts": {
+    "AUTHENTICATE": 1,
+    "CAPABILITY": 1,
+    "EXAMINE": 1,
+    "UID FETCH": 1,
+    "UID SEARCH": 1
+  },
+  "connections": 1,
+  "destructive_ops": 0,
+  "faults": [],
+  "fetches_per_folder": {
+    "INBOX": 1
+  },
+  "reconnects": 0,
+  "redundant_full_folder_reads": {},
+  "redundant_selects": 0,
+  "roundtrips": 5,
+  "snapshot_counts": {
+    "Archive": 0,
+    "INBOX": 120
+  }
+}

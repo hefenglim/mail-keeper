@@ -1,0 +1,29 @@
+{
+  "authentications": 1,
+  "bytes_in": 15533,
+  "bytes_out": 201372,
+  "command_counts": {
+    "AUTHENTICATE": 1,
+    "CAPABILITY": 1,
+    "EXAMINE": 1,
+    "LIST": 1,
+    "SELECT": 1,
+    "UID MOVE": 15,
+    "UID SEARCH": 1
+  },
+  "connections": 1,
+  "destructive_ops": 15,
+  "faults": [],
+  "fetches_per_folder": {},
+  "reconnects": 0,
+  "redundant_full_folder_reads": {},
+  "redundant_selects": 0,
+  "roundtrips": 21,
+  "snapshot_counts": {
+    "Archive": 3000,
+    "INBOX": 27000,
+    "Junk Email": 0,
+    "Work/Projects": 1,
+    "台北": 1
+  }
+}

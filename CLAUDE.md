@@ -142,6 +142,7 @@ was retired in P3; `tests/imap_sim.py` now holds only shared wire helpers + the 
   case). What genuinely can't/shouldn't be offline-tested — `auth.py` MSAL/device-flow, pure `input`/stderr
   wrappers, the `python -m` entry shim — is marked honestly with `# pragma: no cover` / `[tool.coverage.run] omit`
   (not left as silent gaps); auth is verified by `doc/release-smoke.md` against a real account.
+- **Before every release, re-run the full offline large-scale E2E** `python tests/e2e/e2e_bulk_30000.py` (30k msgs / 3k moves over the engine): ALL scenarios must PASS and ALL golden baselines MATCH (no `DRIFT`). It is a growing suite — keep adding scenarios; never remove them. Any unexpected drift in the deterministic fingerprint (round-trips / command counts / redundancy / bytes / per-folder counts) is a regression; only re-bless with `--update` for intentional, PR-reviewed changes. Not in CI (too slow); it is the release gate. See `doc/release-smoke.md` §0.
 - Run `doc/release-smoke.md` (real account) before every release — the only check that hits a real server.
 
 ## 8. Repo etiquette

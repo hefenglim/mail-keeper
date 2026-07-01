@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+### Tests / Tooling — E2E 跨版本守恆黃金基準 + 發版鐵則（無版本變更，待下次一起進版）
+- **E2E 黃金基準 diff（`tests/e2e/baselines/SNN.json`）**：每個場景凍結**決定性指紋**（`loop_report` 的 round-trips／各命令次數／`redundant_*`／bytes／各夾封數 + 注入故障摘要，皆位元組級決定性、與機器負載無關），重跑時逐欄精確比對，**任何漂移即 FAIL**——跨版本自動偵測效率退步或結果變動。有意改動以 `python tests/e2e/e2e_bulk_30000.py --update` 重新祝福（基準 diff 進 PR 受 SR 檢視）。牆鐘秒數非決定性、僅 advisory、不當閘門。漂移閘門已反向證明會觸發。
+- **發版鐵則入 repo**：`doc/release-smoke.md` 新增 §0「離線大規模 E2E（發版前必跑）」、`CLAUDE.md §7` 明訂每次發版前須重跑全套 E2E 並全 PASS + 基準全 MATCH；E2E 為持續累加、只增不減的釋出關卡（非 CI）。
+- 產品程式碼與版本號未變（維持 0.7.0）。
+
 ## [0.7.0] - 2026-07-01
 ### Validated — 大規模全端 E2E 認證（30,000 封 / 3,000 搬移；無產品行為變更）
 本版為里程碑釋出：以 30,000 封信箱、3,000 封搬移的**全端 E2E**（真 `OutlookIMAPClient` + `classifier` + `cli` 跑在線級 IMAP 模擬器引擎上）認證 v0.6.x 累積的韌性／效能成果（features 006/007/008）於大規模、含故障注入下行為正確。**產品程式碼除版本號外未更動**（src/mailkeeper byte-identical 於 0.6.8）。
