@@ -211,9 +211,11 @@ class Result:
 
     @property
     def passed(self) -> bool:
+        # DRIFT（漂移）與 NEW（缺基準）皆視同未通過：新場景必須種下並**提交**基準，否則發版關卡有漏
+        # ——忘了提交基準的新場景不得靜默通過（SR advisory）。--update 模式回 UPDATED、不受此限。
         return (self.error is None
                 and all(ok for _, ok, _ in self.checks)
-                and self.baseline_status != "DRIFT")
+                and self.baseline_status not in ("DRIFT", "NEW"))
 
 
 RESULTS: list[Result] = []
@@ -246,6 +248,8 @@ def scenario(tag: str, title: str):
                     print(f"        ✗ {desc} :: {detail}")
             for field, old, new in r.baseline_diffs:
                 print(f"        Δ baseline 漂移 {field}: {old!r} -> {new!r}")
+            if r.baseline_status == "NEW":
+                print(f"        ! 缺基準檔 {r.tag}.json（新場景）→ 檢視後以 `--update` 種下並**提交**")
             if r.error:
                 print("        ✗ EXCEPTION:\n" + r.error)
             return r
@@ -535,6 +539,8 @@ def main(argv: "list[str] | None" = None) -> int:
                 f.write(f"- {'✅' if ok else '❌'} {desc}" + (f" — `{detail}`" if (detail and not ok) else "") + "\n")
             for field, old, new in r.baseline_diffs:
                 f.write(f"- ⚠️ 基準漂移 `{field}`：`{old}` → `{new}`\n")
+            if r.baseline_status == "NEW":
+                f.write(f"- ⚠️ 缺黃金基準檔（新場景）—— 檢視後以 `--update` 種下並提交，關卡才完整\n")
             if r.error:
                 f.write(f"\n```\n{r.error}\n```\n")
             f.write(f"\nLog：{', '.join(os.path.basename(p) for p in r.logs)}\n")
