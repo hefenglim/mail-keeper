@@ -41,6 +41,8 @@ from mailkeeper.csv_io import ClassificationRow  # noqa: E402
 
 FAKE_TOKEN = "E2E-FAKE-TOKEN-NOT-A-SECRET"
 OUT_DIR = os.path.join(ROOT, "e2e-trace-logs")
+BASELINE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baselines")
+UPDATE_BASELINES = False  # --update：有意改動時重新祝福基準；否則預設比對、任何漂移即 FAIL
 
 N = 30_000                       # INBOX 郵件總數
 MOVE_N = 3_000                   # 搬移總數
@@ -146,6 +148,50 @@ def write_logs(tag: str, server: ImapServer, *, extra: dict | None = None) -> li
     return written
 
 
+# ── 跨版本守恆：決定性「指紋」黃金基準 ──────────────────────────────────────────
+# loop_report 的協定工作量數據與 snapshot 封數皆**位元組級決定性**（與機器/負載無關——imaplib
+# 隨機 tag 前綴長度恆為 4 字、不改變任何計數/bytes），故可凍結為基準、逐版精確比對：任何
+# round-trips / 命令次數 / 冗餘 / bytes / 各夾封數漂移都會被抓出（效率退步或結果變動）。牆鐘秒數
+# 非決定性、不入指紋（僅 advisory 印出，不當閘門）。有意改動以 `--update` 重新祝福（diff 進 PR 受 SR 檢視）。
+
+FINGERPRINT_FIELDS = (
+    "roundtrips", "command_counts", "fetches_per_folder",
+    "redundant_full_folder_reads", "redundant_selects",
+    "authentications", "reconnects", "destructive_ops",
+    "bytes_in", "bytes_out", "connections",
+)
+
+
+def fingerprint(server: ImapServer) -> dict:
+    """場景的決定性指紋：協定工作量 + 最終各夾封數 + 注入故障摘要。"""
+    rep = server.loop_report()
+    fp = {k: rep[k] for k in FINGERPRINT_FIELDS}
+    fp["snapshot_counts"] = {name: len(msgs) for name, msgs in server.snapshot().items()}
+    fp["faults"] = sorted(f"{fe['kind']}:{fe['op']}:{fe['detail']}" for fe in rep["fault_events"])
+    return fp
+
+
+def _baseline_path(tag: str) -> str:
+    return os.path.join(BASELINE_DIR, f"{tag}.json")
+
+
+def diff_baseline(tag: str, fp: dict) -> "tuple[str, list]":
+    """回 (status, diffs)。status：UPDATED（--update 已寫入）/ NEW（無基準）/ MATCH / DRIFT。"""
+    path = _baseline_path(tag)
+    if UPDATE_BASELINES:
+        os.makedirs(BASELINE_DIR, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(fp, f, ensure_ascii=False, indent=2, sort_keys=True)
+            f.write("\n")
+        return "UPDATED", []
+    if not os.path.exists(path):
+        return "NEW", []  # 無基準（新場景）；以 `--update` 種下
+    with open(path, encoding="utf-8") as f:
+        base = json.load(f)
+    diffs = [(k, base.get(k), fp.get(k)) for k in sorted(set(fp) | set(base)) if fp.get(k) != base.get(k)]
+    return ("DRIFT" if diffs else "MATCH"), diffs
+
+
 # ── 場景結果記錄 ─────────────────────────────────────────────────────────────
 
 class Result:
@@ -156,13 +202,20 @@ class Result:
         self.error: str | None = None
         self.elapsed = 0.0
         self.logs: list[str] = []
+        self.baseline_status = "N/A"
+        self.baseline_diffs: list = []
+        self.fingerprint: dict | None = None
 
     def check(self, desc: str, ok: bool, detail: str = "") -> None:
         self.checks.append((desc, bool(ok), detail))
 
     @property
     def passed(self) -> bool:
-        return self.error is None and all(ok for _, ok, _ in self.checks)
+        # DRIFT（漂移）與 NEW（缺基準）皆視同未通過：新場景必須種下並**提交**基準，否則發版關卡有漏
+        # ——忘了提交基準的新場景不得靜默通過（SR advisory）。--update 模式回 UPDATED、不受此限。
+        return (self.error is None
+                and all(ok for _, ok, _ in self.checks)
+                and self.baseline_status not in ("DRIFT", "NEW"))
 
 
 RESULTS: list[Result] = []
@@ -185,12 +238,18 @@ def scenario(tag: str, title: str):
                 mp.undo()
             if server is not None:
                 r.logs = write_logs(tag, server, extra={"scenario": title, "elapsed_s": round(r.elapsed, 2)})
+                r.fingerprint = fingerprint(server)
+                r.baseline_status, r.baseline_diffs = diff_baseline(tag, r.fingerprint)
             RESULTS.append(r)
             status = "PASS" if r.passed else "FAIL"
-            print(f"[{status}] {tag} {title}  ({r.elapsed:.1f}s)")
+            print(f"[{status}] {tag} {title}  ({r.elapsed:.1f}s, 牆鐘 advisory)  baseline={r.baseline_status}")
             for desc, ok, detail in r.checks:
                 if not ok:
                     print(f"        ✗ {desc} :: {detail}")
+            for field, old, new in r.baseline_diffs:
+                print(f"        Δ baseline 漂移 {field}: {old!r} -> {new!r}")
+            if r.baseline_status == "NEW":
+                print(f"        ! 缺基準檔 {r.tag}.json（新場景）→ 檢視後以 `--update` 種下並**提交**")
             if r.error:
                 print("        ✗ EXCEPTION:\n" + r.error)
             return r
@@ -443,9 +502,14 @@ def s8(mp, r):
     return server
 
 
-def main() -> int:
-    print(f"== MailKeeper 全端 E2E（{N:,} 封 / 搬移 {MOVE_N:,} 封）==")
-    print(f"   trace log 輸出目錄：{OUT_DIR}\n")
+def main(argv: "list[str] | None" = None) -> int:
+    global UPDATE_BASELINES
+    args = sys.argv[1:] if argv is None else argv
+    UPDATE_BASELINES = "--update" in args
+    mode = "更新基準（--update，重新祝福）" if UPDATE_BASELINES else "比對基準（任何漂移即 FAIL）"
+    print(f"== MailKeeper 全端 E2E（{N:,} 封 / 搬移 {MOVE_N:,} 封）｜{mode} ==")
+    print(f"   trace log：{OUT_DIR}")
+    print(f"   黃金基準：{BASELINE_DIR}\n")
     for fn in (s1, s2, s3, s4, s5, s6, s7, s8):
         fn()
 
@@ -453,25 +517,35 @@ def main() -> int:
     os.makedirs(OUT_DIR, exist_ok=True)
     report_path = os.path.join(OUT_DIR, "E2E-REPORT.md")
     n_pass = sum(1 for r in RESULTS if r.passed)
+    n_drift = sum(1 for r in RESULTS if r.baseline_status == "DRIFT")
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(f"# MailKeeper 全端 E2E 報告\n\n")
         f.write(f"- 規模：INBOX **{N:,}** 封、搬移 **{MOVE_N:,}** 封\n")
         f.write(f"- 引擎：tests/imap_server.py::ImapServer + SimIMAP4_SSL（真 imaplib over 線級引擎）\n")
-        f.write(f"- 結果：**{n_pass}/{len(RESULTS)}** 場景通過\n\n")
-        f.write("| 場景 | 標題 | 檢查 | 結果 | 耗時 |\n|---|---|---|---|---|\n")
+        f.write(f"- 模式：{mode}\n")
+        f.write(f"- 結果：**{n_pass}/{len(RESULTS)}** 場景通過"
+                + (f"；**{n_drift} 個基準漂移**" if n_drift else "；基準全部相符") + "\n")
+        f.write("- 牆鐘耗時為 advisory（隨機器/負載浮動，不納入基準、不當閘門）；"
+                "效率/結果守恆由決定性指紋把關。\n\n")
+        f.write("| 場景 | 標題 | 檢查 | 基準 | 結果 | 耗時 |\n|---|---|---|---|---|---|\n")
         for r in RESULTS:
             n_ok = sum(1 for _, ok, _ in r.checks if ok)
-            f.write(f"| {r.tag} | {r.title} | {n_ok}/{len(r.checks)} | "
+            f.write(f"| {r.tag} | {r.title} | {n_ok}/{len(r.checks)} | {r.baseline_status} | "
                     f"{'✅ PASS' if r.passed else '❌ FAIL'} | {r.elapsed:.1f}s |\n")
         f.write("\n## 各場景檢查明細\n")
         for r in RESULTS:
-            f.write(f"\n### {r.tag} — {r.title}（{'PASS' if r.passed else 'FAIL'}）\n")
+            f.write(f"\n### {r.tag} — {r.title}（{'PASS' if r.passed else 'FAIL'}，基準 {r.baseline_status}）\n")
             for desc, ok, detail in r.checks:
                 f.write(f"- {'✅' if ok else '❌'} {desc}" + (f" — `{detail}`" if (detail and not ok) else "") + "\n")
+            for field, old, new in r.baseline_diffs:
+                f.write(f"- ⚠️ 基準漂移 `{field}`：`{old}` → `{new}`\n")
+            if r.baseline_status == "NEW":
+                f.write(f"- ⚠️ 缺黃金基準檔（新場景）—— 檢視後以 `--update` 種下並提交，關卡才完整\n")
             if r.error:
                 f.write(f"\n```\n{r.error}\n```\n")
             f.write(f"\nLog：{', '.join(os.path.basename(p) for p in r.logs)}\n")
-    print(f"\n== 彙整：{n_pass}/{len(RESULTS)} 場景通過 ==")
+    print(f"\n== 彙整：{n_pass}/{len(RESULTS)} 場景通過"
+          + (f"，{n_drift} 個基準漂移" if n_drift else "，基準全部相符") + " ==")
     print(f"   報告：{report_path}")
     return 0 if n_pass == len(RESULTS) else 1
 

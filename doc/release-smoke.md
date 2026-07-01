@@ -6,6 +6,15 @@
 >
 > 需要可登入的測試信箱與已設好的 `config.json`。請用**測試帳號或可拋棄的資料夾**，不要拿正式信箱做搬移/刪除測試。
 
+## 0. 離線大規模 E2E（發版前必跑 —— 30k/3k 回歸關卡）
+> 離線關卡（真 client 跑在線級 IMAP 模擬器引擎上），與下方真實帳號檢查互補。**每次發版前必跑、全部通過**才可繼續。這份 E2E 會持續累加新 scenario（見 `tests/e2e/e2e_bulk_30000.py`）。
+
+- [ ] `python tests/e2e/e2e_bulk_30000.py`
+  - [ ] **全部場景 PASS**（目前 8/8；未來累加的 scenario 一律要全通過）。
+  - [ ] **黃金基準全部 MATCH**（無 `DRIFT`）—— 任何 round-trips / 命令次數 / 冗餘 / bytes / 各夾封數漂移都代表效率或結果退步，須查明原因（跨版本守恆）。
+  - [ ] 若漂移是**有意改動**（優化/新功能），檢視 diff 合理後 `python tests/e2e/e2e_bulk_30000.py --update` 重新祝福，並把基準 diff 納入該 PR 供 SR 檢視；**非預期漂移一律當回歸處理**。
+  - [ ] trace log 在 `e2e-trace-logs/`（可查底層操作記錄）；牆鐘秒數僅 advisory、不當閘門。
+
 ## 前置
 - [ ] 安裝待發版本：`pip install --user dist/mailkeeper-<版本>-py3-none-any.whl`（或 `pip install -e .`）。
 - [ ] `python -c "import mailkeeper; print(mailkeeper.__version__)"` == 待發版本。
